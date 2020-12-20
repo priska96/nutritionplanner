@@ -1,0 +1,135 @@
+# SOME DESCRIPTIVE TITLE.
+# Copyright (C) YEAR THE PACKAGE'S COPYRIGHT HOLDER
+# This file is distributed under the same license as the PACKAGE package.
+# FIRST AUTHOR <EMAIL@ADDRESS>, YEAR.
+#
+#, fuzzy
+msgid ""
+msgstr ""
+"Project-Id-Version: PACKAGE VERSION\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2019-04-12 08:32+0200\n"
+"PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
+"Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
+"Language-Team: LANGUAGE <LL@li.org>\n"
+"Language: \n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+#: generator/admin.py:17
+msgid "Key starts with"
+msgstr ""
+
+#: generator/admin.py:31
+msgid "Bread and rolls"
+msgstr ""
+
+#: generator/admin.py:32
+msgid "Cereal products, grains, flours, milled products, rice"
+msgstr ""
+
+#: generator/admin.py:33
+msgid "Cakes, tarts, pastries, biscuits"
+msgstr ""
+
+#: generator/admin.py:34
+msgid "Eggs and egg products, noodles"
+msgstr ""
+
+#: generator/admin.py:35
+msgid "Fruit and fruit products"
+msgstr ""
+
+#: generator/admin.py:36
+msgid "Vegetables and vegetable products"
+msgstr ""
+
+#: generator/admin.py:37
+msgid "Legumes, pulses, nuts, oil- and other seedss"
+msgstr ""
+
+#: generator/admin.py:38
+msgid "Potatoes and potato products, starchy roots and tubers, mushrooms"
+msgstr ""
+
+#: generator/admin.py:39
+msgid "Milk, dairy products, cheese"
+msgstr ""
+
+#: generator/admin.py:40
+msgid "Non-alcoholic beverages"
+msgstr ""
+
+#: generator/admin.py:41
+msgid "Alcoholic beverages"
+msgstr ""
+
+#: generator/admin.py:42
+msgid "Oils, fats, butter, lard"
+msgstr ""
+
+#: generator/admin.py:43
+msgid "Spices, seasonings, raising agents, condiments"
+msgstr ""
+
+#: generator/admin.py:44
+msgid "Sweets, sugar, chocolate, ice cream"
+msgstr ""
+
+#: generator/admin.py:45
+msgid "Fish and fish products, shrimps, crayfish, shellfish, molluscs"
+msgstr ""
+
+#: generator/admin.py:46
+msgid "Meat (excluding organs) beef, veal, pork, mutton"
+msgstr ""
+
+#: generator/admin.py:47
+msgid "Venison, poultry, feathered game, offal"
+msgstr ""
+
+#: generator/admin.py:48
+msgid "Sausages and other meat products"
+msgstr ""
+
+#: generator/admin.py:49
+msgid "Composite dishes containing mainly vegetable products"
+msgstr ""
+
+#: generator/admin.py:50
+msgid "Composite dishes containing mainly animal products"
+msgstr ""
+
+#: generator/admin.py:109
+msgid "Meal Type"
+msgstr ""
+
+#: generator/admin.py:123
+msgid "Breakfast"
+msgstr ""
+
+#: generator/admin.py:124
+msgid "Lunch"
+msgstr ""
+
+#: generator/admin.py:125
+msgid "Dinner"
+msgstr ""
+
+#: generator/admin.py:126
+msgid "Snack"
+msgstr ""
+
+#: generator/periods_extensions.py:37
+#, python-format
+msgid "Week: %(start)s-%(end)s"
+msgstr ""
+
+#: nutritionplaner/settings.py:137
+msgid "German"
+msgstr ""
+
+#: nutritionplaner/settings.py:138
+msgid "English"
+msgstr ""

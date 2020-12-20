@@ -1,0 +1,15 @@
+<span class="heading">Makronährstoffe:</span>
+{% for nutri in nutrients %}
+    {% if forloop.counter == 11 %}
+        <span class="heading_v">Vitamine:<i class="fa fa-chevron-down"></i>
+        </span>
+        <div class="inner_v">
+    {% elif forloop.counter == 24 %}
+        </div>
+        <span class="heading_m">Mineralien & Spurenelemente:<i class="fa fa-chevron-down"></i>
+        </span>
+        <div class="inner_m">
+    {% endif %}
+    {{ nutri|safe }}
+{% endfor %}
+</div>

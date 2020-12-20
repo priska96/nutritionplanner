@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+{% load i18n static staticfiles %}
+<html lang="de-de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+    <!-- Favicon Stuff-->
+    <link rel="apple-touch-icon" sizes="180x180" href="{% static "generator/favicon/apple-touch-icon.png" %}">
+    <link rel="icon" type="image/png" sizes="32x32" href="{% static "generator/favicon/favicon-32x32.png" %}">
+    <link rel="icon" type="image/png" sizes="16x16" href="{% static "generator/favicon/favicon-16x16.png" %}">
+    <link rel="manifest" href="{% static "generator/favicon/site.webmanifest" %}">
+    <link rel="mask-icon" href="{% static "generator/favicon/safari-pinned-tab.svg" %}" color="#5bbad5">
+    <meta name="msapplication-TileColor" content="#c4a9b0">
+    <meta name="theme-color" content="#ffffff">
+
+    <link rel="stylesheet" href="https://use.fontawesome.com/releases/v5.8.1/css/all.css"
+          integrity="sha384-50oBUHEmvpQ+1lW4y57PTFmhCaXp0ML5d60M1M7uH2+nqUivzIebhndOJK28anvf" crossorigin="anonymous">
+
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.1.1/css/bootstrap.min.css"
+          integrity="sha384-WskhaSGFgHYWDcbwN70/dfYBj47jz9qbsMId/iRN3ewGhXQFZCSftd1LZCfmhktB" crossorigin="anonymous">
+    <link rel="stylesheet" href="{% static "schedule.css" %}" type="text/css" media="screen">
+
+    <!-- jQuery style for Tooltips -->
+    <link href="{% static "js/jquery-ui-themes-1.12.1/themes/base/jquery-ui.css" %}" rel="stylesheet" type="text/css"/>
+    <link href="{% static "js/jquery-ui-themes-1.12.1/themes/base/theme.css" %}" rel="stylesheet" type="text/css"/>
+    <!-- style for fullcalendar -->
+    <link rel="stylesheet" href="{% static "js/jquery.qtip.css" %}" type="text/css" media="screen">
+    <link rel="stylesheet" href="{% static "fullcalendar/core/main.css" %}" type="text/css" media="screen">
+    <link rel="stylesheet" href="{% static "fullcalendar/daygrid/main.css" %}" type="text/css" media="screen">
+    <link rel="stylesheet" href="{% static "fullcalendar/timegrid/main.css" %}" type="text/css" media="screen">
+
+    <link rel="stylesheet" href="{% static "generator/styles.css" %}" type="text/css" media="screen">
+
+    {% block extra_head %}
+    {% endblock %}
+    <title>Ernährungsplan</title>
+</head>
+<body>
+
+{% block main_content %}
+    <header><h1>Erstelle deinen monatlichen Ernährungsplan*!</h1></header>
+
+    <form id="personsform" action="{% url 'index' %}" method="post">
+        {% csrf_token %}
+        {{ form.non_field_errors }}
+        <div class="mycol-1">
+            <div class="fieldWrapper{% if form.name.errors %} error{% endif %}">
+                {{ form.name.errors }}
+                <label for="{{ form.name.id_for_label }}">Name:</label>
+                {{ form.name }}
+            </div>
+            <div class="fieldWrapper{% if form.gender.errors %} error{% endif %}">
+                {{ form.gender.errors }}
+                <label for="{{ form.gender.id_for_label }}">Geschlecht:</label>
+                {{ form.gender }}
+            </div>
+            <div class="fieldWrapper{% if form.age.errors %} error{% endif %}">
+                {{ form.age.errors }}
+                <label for="{{ form.age.id_for_label }}">Alter:</label>
+                {{ form.age }}
+            </div>
+            <div class="fieldWrapper{% if form.weight.errors %} error{% endif %}">
+                {{ form.weight.errors }}
+                <label for="{{ form.weight.id_for_label }}">Gewicht (kg):</label>
+                {{ form.weight }}
+            </div>
+            <div class="fieldWrapper{% if form.height.errors %} error{% endif %}">
+                {{ form.height.errors }}
+                <label for="{{ form.height.id_for_label }}">Größe (cm):</label>
+                {{ form.height }}
+            </div>
+            <div class="fieldWrapper{% if form.pregnant.errors %} error{% endif %}">
+                {{ form.pregnant.errors }}
+                <label for="{{ form.pregnant.id_for_label }}">Schwanger:</label>
+                {{ form.pregnant }}
+            </div>
+            <div class="fieldWrapper{% if form.goal.errors %} error{% endif %}">
+                {{ form.goal.errors }}
+                <label for="{{ form.goal.id_for_label }}">Ziel:</label>
+                {{ form.goal }}
+            </div>
+        </div>
+        <div class="mycol-2">
+            <div class="fieldWrapper{% if form.activity.errors %} error{% endif %}">
+                {{ form.activity.errors }}
+                <label for="{{ form.activity.id_for_label }}">Aktivitätslevel:
+                    <i class="fa fa-info-circle" title="{{ form.activity.help_text }}"></i>
+                </label>
+                {{ form.activity }}
+            </div>
+            <div class="fieldWrapper{% if form.sports.errors %} error{% endif %}">
+                {{ form.sports.errors }}
+                <label for="{{ form.sports.id_for_label }}">Sport oder anstrengende Freizeitaktivitäten:
+                    <i class="fa fa-info-circle" title="{{ form.sports.help_text }}"></i>
+                </label>
+                {{ form.sports }}
+            </div>
+            <div class="fieldWrapper{% if form.nutrition_habit.errors %} error{% endif %}">
+                {{ form.nutrition_habit.errors }}
+                <label for="{{ form.nutrition_habit.id_for_label }}">Essweise:</label>
+                {{ form.nutrition_habit }}
+            </div>
+            <div class="fieldWrapper{% if form.allergies.errors %} error{% endif %}">
+                {{ form.allergies.errors }}
+                <label for="{{ form.allergies.id_for_label }}">Allergien:</label>
+                {{ form.allergies }}
+            </div>
+            <div class="fieldWrapper{% if form.preferences.errors %} error{% endif %}">
+                {{ form.preferences.errors }}
+                <label for="{{ form.preferences.id_for_label }}">Vorlieben:
+                    <i class="fa fa-info-circle" title="{{ form.preferences.help_text }}"></i>
+                </label>
+                {{ form.preferences }}
+            </div>
+            <div class="fieldWrapper{% if form.dislikes.errors %} error{% endif %}">
+                {{ fform.dislikes.errors }}
+                <label for="{{ form.dislikes.id_for_label }}">Abneigungen:
+                    <i class="fa fa-info-circle" title="{{ form.dislikes.help_text }}"></i>
+                </label>
+                {{ form.dislikes }}
+            </div>
+        </div>
+
+        <input type="submit" value="Abschicken"/>
+    </form>
+    <p class="planinfo">
+        *Dieser Ernährungsplan bezieht nur feste Lebensmittel mit ein. Das bedeutet, Getränke können beliebig (natürlich in Maßen) verzehrt werden und die Gerichte können nach Belieben gewürzt und verfeinert werden. Dieser Plan soll lediglich als Empfehlung dienen, sodass die Lebensmittel zwischen den einzelnen Mahlzeiten vertauscht werden dürfen. Ebenso zielt der Plan stets nur die Untergrenzen der Makronährstoffe an, sodass ein Puffer an aufzunehmenden Kalorien besteht.<br>
+        Beim Zubereiten verlieren viele Lebensmittel Nährstoffe. Desweiteren nimmt der Körper nur so viel an Nährstoffen auf wie er auch verarbeiten kann. Überschüssiges wird ausgeschieden.
+    </p>
+    <div id="container" style="width:1500px;margin: 0 auto"></div>
+
+    <div id="calendar">
+
+    </div>
+{% endblock main_content %}
+
+<script src="{% static "js/jquery.js" %}"></script>
+<script src="{% static "js/jquery-ui.js" %}"></script>
+<script src="{% static "js/moment.js" %}"></script>
+<script src="{% static "js/jquery.qtip.js" %}"></script>
+
+
+<!--script src="{% static "bootstrap-3.3.5-dist/js/bootstrap.min.js" %}"></script-->
+<script src="{% static "schedule.js" %}"></script>
+
+<script src="{% static "fullcalendar/core/main.js" %}"></script>
+<script src="{% static "fullcalendar/core/de.js" %}"></script>
+<script src="{% static "fullcalendar/interaction/main.js" %}"></script>
+<script src="{% static "fullcalendar/daygrid/main.js" %}"></script>
+<script src="{% static "fullcalendar/timegrid/main.js" %}"></script>
+
+<script type="module" src="{% static "fullcalendar/popper/popper.js" %}"></script>
+<script type="module" src="{% static "fullcalendar/tooltip/tooltip.js" %}"></script>
+<script src="https://code.highcharts.com/highcharts.js"></script>
+<script src="https://code.highcharts.com/modules/exporting.js"></script>
+<script src="https://code.highcharts.com/modules/export-data.js"></script>
+<script src="{% static "generator/generator.js" %}"></script>
+<script type="text/javascript">
+    //events: '/mealplan/'+id+'?ask'
+    $(document).ready(function () {
+        //document.addEventListener('DOMContentLoaded', function () {
+        id = '{{ person.id }}';
+
+        $('.fa-info-circle').tooltip({
+            classes: {
+                "ui-tooltip": " "
+            }
+        });
+        $('#id_gender').change(function () {
+            if($('#id_gender').val() !== 'f'){
+                $('#id_pregnant').attr('disabled','disabled');
+            }
+            else{
+                $('#id_pregnant').removeAttr('disabled');
+            }
+        });
+
+        var stats_area = $('#container');
+        var formatter = function () {
+            if (this.y > 0)
+                return this.y + ' ' + this.series.name;
+            if (this.y < 0)
+                return this.y + ' ' + this.series.name;
+        };
+        stats_area.html('');
+        /*$.ajax(
+            {
+                url: "stats?kv_key=stats_values_list",
+                type: "GET",
+                dataType: 'json',
+                success: function (result) {
+                    console.log(result)
+                    result.forEach(function (element, index, array) {
+                        element.plotOptions.series.dataLabels.formatter = formatter;
+                        console.log(element.plotOptions)
+                        Highcharts.chart('container', element)
+                    });
+                },
+                error: function (e) {
+                    console.log(e);
+                }
+            });*/
+        $('.fa-times').click(function () {
+            $(this).parent('.popupWrapper').hide();
+        });
+
+    });
+</script>
+{% block scripts %}
+{% endblock scripts %}
+</body>
+</html>

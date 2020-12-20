@@ -1,0 +1,1268 @@
+from django.db import models
+from django.db.models import Q, Sum, F
+from django.db.models.functions import Coalesce
+from schedule.models import Event
+from random import randint, shuffle, uniform, random
+from operator import itemgetter
+import re
+from .dict import LIMITS_MALE, LIMITS_FEMALE
+import math
+from pulp import *
+import json
+
+
+class Person(models.Model):
+    name = models.CharField('name', max_length=20, blank=True, null=True, default='Priska')
+    gender = models.CharField('gender', max_length=7, choices=(('m', 'male'), ('f', 'female')))
+    age = models.IntegerField('age')
+    weight = models.FloatField('weight in kg')
+    height = models.FloatField('height in m')
+    nutrition_habit = models.CharField('nutrition habit', max_length=11, default='veggie',
+                                       choices=(('o', 'omnivore'), ('veggie', 'vegetarian'), ('v', 'vegan')))
+    allergies = models.CharField('allergies', max_length=11, null=True, blank=True,
+                                 choices=(('l', 'lactose'), ('n', 'nuts'), ('g', 'gluten'),
+                                          ('ln', 'lactose, nuts'),('lg', 'lactose, gluten'),
+                                          ('ng', 'nuts, gluten'),('lng', 'lactose, nuts, gluten')))
+    activity = models.CharField('activity', max_length=11, null=True, blank=True,
+                                choices=(('1', 'sitting or lying'), ('2', 'sitting and little freetime activities'),
+                                         ('3', 'sitting, walking and little freetime activites'),
+                                         ('4', 'mostly standing and walking'),
+                                         ('5', 'physically demanding work and much freetime acitivies')))
+    sports = models.BooleanField('sports or exhausting freetime', default=False)
+
+    goal = models.CharField('goal', max_length=11, null=True, blank=True,
+                            choices=(('l', 'loose weight'), ('g', 'gain weight'), ('k', 'keep weight'),
+                                     ('s', 'structured eating')))
+    pregnant = models.CharField('pregnant', max_length=11, default='n',
+                                       choices=(('n', 'no'), ('y', 'yes')))
+
+    def __str__(self):
+        return self.name
+
+    def get_bmi(self):
+        return self.weight/(self.height*self.height)
+
+    # basic metabolism rate
+    # benedict and harris formula, 1919
+    def get_bmr1(self):
+        if self.gender == 'm':
+            return 66.473+13.752*self.weight+5.003*self.height*100-6.755*self.age
+        return 655.096+9.563*self.weight+1.850*self.height*100-4.676*self.age
+
+    # basic metabolism rate
+    # WHO and FAO
+    def get_bmr2(self):
+        if self.gender == 'm':
+            if self.age in range(19,30):
+                return (0.063*self.weight + 2.896)* 293
+            elif self.age in range(31,59):
+                return (0.048*self.weight + 3.653)* 293
+            else : 
+                return (0.049*self.weight + 2.459)* 293
+        else:
+            if self.age in range(19,30):
+                return (0.062*self.weight + 2.036)* 293
+            elif self.age in range(31,59):
+                return (0.034*self.weight + 3.538)* 293
+            else: 
+                return (0.038*self.weight + 2.755)* 293 
+
+    # basic metabolism rate
+    # trivial
+    def get_bmr3(self):
+        return self.weight * 24
+
+    def get_bmr(self):
+        return (self.get_bmr1()+self.get_bmr2()+self.get_bmr3())/3
+
+    # physical activity level
+    # work + freetime + sleep
+    def get_pal_min(self):
+        pal = 0
+        if self.activity == '1':
+            return 1.2
+        if self.activity == '2':
+            return 1.4
+        if self.activity == '3':
+            pal = 1.6
+        if self.activity == '4':
+            pal = 1.8
+        if self.activity == '5':
+            pal = 2.0
+        if self.sports:
+            pal += 0.3
+        return pal
+
+    def get_pal_max(self):
+        pal = 0
+        if self.activity == '1':
+            return 1.3
+        if self.activity == '2':
+            return 1.5
+        if self.activity == '3':
+            pal = 1.7
+        if self.activity == '4':
+            pal = 1.9
+        if self.activity == '5':
+            pal = 2.4
+        if self.sports:
+            pal += 0.3
+        return pal
+
+    def get_full_energyneed(self):
+        if self.pregnant == 'y':
+            return (self.get_bmr1() * self.get_pal_min() + 225,self.get_bmr1() * self.get_pal_max() + 225)
+        return (self.get_bmr1() * self.get_pal_min(),self.get_bmr1() * self.get_pal_max())
+
+    def get_full_energyneed_goal(self):
+        if self.goal == 'l':
+            return (self.get_full_energyneed()[0]-300, self.get_full_energyneed()[1]-300)
+        if self.goal == 'g':
+            return (self.get_full_energyneed()[0]+300, self.get_full_energyneed()[0]+300)
+        return self.get_full_energyneed()
+
+    def get_nutrient_limits(self, meal_type_size):
+        energy = self.get_full_energyneed_goal()
+        if self.gender == 'f':
+            dict = LIMITS_FEMALE
+            dict['energy_kcal'] = (energy[0], energy[1])
+            dict['energy_kj'] = (energy[0] * 4.184, energy[1] * 4.184)
+            dict['carbs'] = (0.5*energy[0]*0.24*1000, 0.5*energy[1]*0.24*1000) # gram -> mg
+            dict['fat'] = (0.3*energy[0]*0.11*1000, 0.3*energy[1]*0.11*1000) # gram -> mg
+            dict['protein'] = ((0.8*self.weight)*1000, 0.8*self.weight*1000) # gram -> mg
+        
+        else:
+            dict = LIMITS_MALE 
+            '''dict['energy_kcal'] = (energy[0]*meal_type_size, energy[1]*meal_type_size)
+            dict['energy_kj'] = (energy[0] * 4.184 *meal_type_size, energy[1] * 4.184*meal_type_size)
+            dict['carbs'] = (0.5*energy[0]*0.24*1000*meal_type_size, 0.5*energy[1]*0.24*1000*meal_type_size) if self.pregnant == 'n' else (0.55*energy[0]*0.24*1000*meal_type_size, 0.55*energy[1]*0.24*1000*meal_type_size) 
+            dict['fat'] = (0.3*energy[0]*0.11*1000*meal_type_size, 0.3*energy[1]*0.11*1000*meal_type_size)
+            dict['protein'] = ((0.8*self.weight-5)*1000*meal_type_size, 0.8*self.weight*1000*meal_type_size) if self.pregnant == 'n' else ((0.9*self.weight-5)*1000*meal_type_size, 0.9*self.weight*1000*meal_type_size)
+            dict['fibre'] = (30000*meal_type_size, 30000*meal_type_size)
+            dict['sugar_total'] = (200000*meal_type_size,250000*meal_type_size)
+            dict['sum_of_saturated_fatty_acids'] = (0.1*energy[0]*0.11*1000*meal_type_size, 0.1*energy[1]*0.11*1000*meal_type_size)
+            dict['sum_of_monounsaturated_fatty_acids'] = (0.15*energy[0]*0.11*1000*meal_type_size, 0.15*energy[1]*0.11*1000*meal_type_size)
+            dict['sum_of_polyunsaturated_fatty_acids'] = (0.07*energy[0]*0.11*1000*meal_type_size, 0.07*energy[1]*0.11*1000*meal_type_size)
+            dict['vitamin_a'] = (800*meal_type_size, 800*meal_type_size) if self.gender == 'f' else (1000*meal_type_size, 1000*meal_type_size)
+            dict['vitamin_b1'] = (1000*meal_type_size, 1000*meal_type_size) if self.gender == 'f' else (1200*meal_type_size, 1300*meal_type_size)
+            dict['vitamin_b2'] = (1000*meal_type_size, 1100*meal_type_size) if self.gender == 'f' else (1300*meal_type_size, 1400*meal_type_size)
+            dict['vitamin_b3'] = (11000*meal_type_size, 13000*meal_type_size) if self.gender == 'f' else (15000*meal_type_size, 16000*meal_type_size)
+            dict['vitamin_b5'] = (6000*meal_type_size, 6000*meal_type_size)
+            dict['vitamin_b6'] = (1200*meal_type_size, 1200*meal_type_size) if self.gender == 'f' else (1500*meal_type_size, 1600*meal_type_size)
+            dict['vitamin_b7'] = (30*meal_type_size,60*meal_type_size)
+            dict['vitamin_b9'] = (300*meal_type_size, 300*meal_type_size)
+            dict['vitamin_b12'] = (3*meal_type_size, 3*meal_type_size)
+            dict['vitamin_c'] = (95000*meal_type_size, 95000*meal_type_size) if self.gender == 'f' else (110000*meal_type_size, 110000*meal_type_size)
+            dict['vitamin_d'] = (20*meal_type_size, 20*meal_type_size)
+            dict['vitamin_e'] = (12000*meal_type_size, 12000*meal_type_size) if self.gender == 'f' else (13000*meal_type_size,15000*meal_type_size)
+            dict['vitamin_k'] = (60*meal_type_size, 60*meal_type_size) if self.gender == 'f' else (70*meal_type_size, 70*meal_type_size)
+            dict['sodium'] = (1500*meal_type_size, 1500*meal_type_size)
+            dict['potassium'] = (4000*meal_type_size, 4000*meal_type_size)
+            dict['calcium'] = (1000*meal_type_size, 1200*meal_type_size)
+            dict['magnesium'] = (300*meal_type_size, 350*meal_type_size) if self.gender == 'f' else (350*meal_type_size, 400*meal_type_size)
+            dict['phosphorus'] = (700*meal_type_size, 1250*meal_type_size)
+            #dict['sulphur'] =
+            #dict['chloride'] =
+            dict['iron'] = (10000*meal_type_size, 15000*meal_type_size) if self.gender == 'f' else (10000*meal_type_size, 12000*meal_type_size)
+            dict['zinc'] = (7000*meal_type_size, 7000*meal_type_size) if self.gender == 'f' else (10000*meal_type_size, 10000*meal_type_size)
+            dict['copper'] = (1000, 1500*meal_type_size)
+            dict['manganese'] = (2000*meal_type_size, 5000*meal_type_size)
+            dict['fluoride'] = (2900*meal_type_size, 3100*meal_type_size) if self.gender == 'f' else (3200*meal_type_size, 3800*meal_type_size)
+            dict['iodide'] = (180*meal_type_size, 200*meal_type_size)
+
+            if self.pregnant == 'y':
+                dict['vitamin_a'] = (1100*meal_type_size, 1100*meal_type_size) 
+                dict['vitamin_b1'] = (1200*meal_type_size, 1300*meal_type_size) 
+                dict['vitamin_b2'] = (1300*meal_type_size, 1400*meal_type_size)
+                dict['vitamin_b3'] = (14000*meal_type_size, 16000*meal_type_size)
+                dict['vitamin_b6'] = (1900*meal_type_size, 1900*meal_type_size)
+                dict['vitamin_b9'] = (550*meal_type_size, 600*meal_type_size)
+                dict['vitamin_b12'] = (3.5*meal_type_size, 3.5*meal_type_size)
+                dict['vitamin_c'] = (105000*meal_type_size, 105000*meal_type_size)
+                dict['vitamin_e'] = (13000*meal_type_size, 13000*meal_type_size)
+
+                dict['calcium'] = (1000*meal_type_size, 1200*meal_type_size)
+                dict['magnesium'] = (300*meal_type_size, 350*meal_type_size)
+                dict['iron'] = (30000*meal_type_size, 30000*meal_type_size)
+                dict['iodide'] = (200*meal_type_size, 230*meal_type_size)
+        '''
+        for key in dict:
+            print(dict[key])
+            dict[key] = (dict[key][0]*meal_type_size,dict[key][1]*meal_type_size)
+            print(dict[key])
+        return dict
+    def get_ingredients_based_on_nutrition_habit(self, mealtype):
+        if self.nutrition_habit == 'v':
+            ingredients = Ingredients.objects.get_vegan()
+        elif self.nutrition_habit == 'veggie':
+            ingredients = Ingredients.objects.get_veggie()
+        else:
+            ingredients = Ingredients.objects.all()
+        ingredients = ingredients.exclude(key__regex=r'\AX|\AY')
+        ingredients = ingredients.exclude(status='irrelevant')
+        #print(ingredients.count())
+        #if 'l' in self.allergies:
+        #    ingredients = ingredients.get_lactose_free()
+        #if 'f' in self.allergies:
+        #    ingredients = ingredients.get_fructose_free()
+        #if 'n' in self.allergies:
+        #    ingredients = ingredients.exclude(contains='n')
+        ingredients = ingredients.filter(type__type=mealtype)
+        #print(ingredients.count())
+        
+        #print(ingredients.count())
+
+        
+        grains = list(ingredients.filter(Q(key__startswith='B') | Q(key__startswith='C')| Q(key__startswith='D')).values_list('key',flat=True))
+        potato = list(ingredients.filter(key__regex=r'\AK[0-6]').values_list('key',flat=True))
+        cereals = list(ingredients.filter(key__regex=r'\AE[4-9]').values_list('key',flat=True))
+        grains_cereals_potato = grains + cereals + potato
+
+        vegetables = list(ingredients.filter(Q(key__startswith='G') | Q(key__startswith='H')).values_list('key',flat=True))
+        fruits = list(ingredients.filter(key__startswith='F').values_list('key',flat=True))
+        dairy = list(ingredients.filter(key__startswith='M').values_list('key',flat=True))
+
+        meat_sausage_fish = list(ingredients.filter(Q(key__startswith='T') | Q(key__startswith='U')| Q(key__startswith='V')| Q(key__startswith='W')).values_list('key',flat=True))
+        eggs = list(ingredients.filter(key__regex=r'\AE[0-1]').values_list('key',flat=True))
+        meat_sausage_fish_eggs = meat_sausage_fish +  eggs 
+
+        sweets = list(ingredients.filter(key__startswith='S').values_list('key',flat=True))
+
+        #shuffle(grains_cereals_potato)
+        #shuffle(vegetables)
+        #shuffle(fruits)
+        #shuffle(dairy)
+        #shuffle(meat_sausage_fish_eggs)
+        #shuffle(sweets)
+        '''print('ingredient lists START')
+        print(grains_cereals_potato)
+        print(vegetables)
+        print(fruits)
+        print(dairy)
+        print(meat_sausage_fish_eggs)
+        print(sweets)
+        print('ingredient lists END')'''
+
+
+        # create ingredient list with length 100 (v | veggie | omnivore)
+        # mealtype = b switch fruits and veggie amount
+        # mealtype = l add dairy+sweets to veggies,fruits,grains 
+        # mealtype = d add sweets to veggies
+        # mealtype = s add meaat to sweets and take/add  from/to veggies to get 4sweets
+        # 1. Getreide, Getreideprodukte und Kartoffeln (37% | 33% | 30%)
+        # 2. Gemüse (44%|29%|26%)
+        # 3. Obst (17%)
+        # 4. Milch und Milchprodukte (0% | 18% | 18%)
+        # 5. Fleisch, Wurst, Fisch und Eier (0% | 1% | 7%)
+        # 6. Süsigkeiten und süße Aufstriche (2%)
+        
+        if self.nutrition_habit == 'v':
+            if mealtype == 'b':
+                ingredients_keies  = grains_cereals_potato[:37] + vegetables[:17] + fruits[:44] + sweets[:2]
+            if mealtype == 'l' or mealtype == 'd':
+                ingredients_keies  = grains_cereals_potato[:37] + vegetables[:46] + fruits[:17]
+            else:
+                ingredients_keies  = grains_cereals_potato[:37] + vegetables[:42] + fruits[:17] + sweets[:4]
+
+        elif self.nutrition_habit == 'veggie':
+            if mealtype == 'b':
+                ingredients_keies  = grains_cereals_potato[:33] + vegetables[:17] + fruits[:29] + dairy[:18] + meat_sausage_fish_eggs[:1] + sweets[:2]
+            elif mealtype == 'l':
+                ingredients_keies  = grains_cereals_potato[:38] + vegetables[:38] + fruits[:21] + meat_sausage_fish_eggs[:3] 
+            elif mealtype == 'd':
+                ingredients_keies  = grains_cereals_potato[:33] + vegetables[:31] + fruits[:17] + dairy[:18] + meat_sausage_fish_eggs[:1]
+            else:
+                ingredients_keies  = grains_cereals_potato[:33] + vegetables[:28] + fruits[:17] + dairy[:18] + sweets[:4]
+        else:
+            if mealtype == 'b':
+                ingredients_keies  = grains_cereals_potato[:30] + vegetables[:17] + fruits[:26] + dairy[:18] + meat_sausage_fish_eggs[:7] + sweets[:2]
+            elif mealtype == 'l':
+                ingredients_keies  = grains_cereals_potato[:40] + vegetables[:36] + fruits[:27] + meat_sausage_fish_eggs[:7]
+            elif mealtype == 'd':
+                ingredients_keies  = grains_cereals_potato[:30] + vegetables[:28] + fruits[:17] + dairy[:18] + meat_sausage_fish_eggs[:7]
+            else:
+                ingredients_keies  = grains_cereals_potato[:30] + vegetables[:31] + fruits[:17] + dairy[:18] + sweets[:4]
+        portion = [0]*len(ingredients_keies)
+        ingredient_vector = [ingredients_keies,portion]
+        ingreds = Ingredients.objects.filter(key__in=ingredients_keies)
+        ingreds.update(portion_size=0.0)
+        ingreds_grains = ingreds.filter(key__in=grains_cereals_potato)
+        veg_fru = vegetables+fruits
+        ingreds_veg_fru = ingreds.filter(key__in=veg_fru)
+        dairy_meat = dairy + meat_sausage_fish_eggs
+        ingreds_dairy_meat = ingreds.filter(key__in=dairy_meat)
+        ingreds_sweets = ingreds.filter(key__in=sweets)
+        return ingreds, ingreds_grains, ingreds_veg_fru, ingreds_dairy_meat, ingreds_sweets #ingredient_vector
+
+    def create_meal(self):
+        # Create the 'prob' variable to contain the problem data
+        prob = LpProblem("The Portion Size min kcal", LpMinimize)
+
+        while LpStatus[prob.status] != 'Optimal':
+            limits = self.get_nutrient_limits(meal_type_size=1.0)
+            
+            breakfast = Meal(name='first breakfast', type='b')
+            breakfast.save()
+            lunch = Meal(name='first lunch', type='l')
+            lunch.save()
+            dinner = Meal(name='first dinner', type='d')
+            dinner.save()
+
+            ingredients_list_b, ingreds_grains_b, ingreds_veg_fru_b, ingreds_dairy_meat_b, ingreds_sweets_b = self.get_ingredients_based_on_nutrition_habit(breakfast.type)
+            ingredients_list_l, ingreds_grains_l, ingreds_veg_fru_l, ingreds_dairy_meat_l, ingreds_sweets_l = self.get_ingredients_based_on_nutrition_habit(lunch.type)
+            ingredients_list_d, ingreds_grains_d, ingreds_veg_fru_d, ingreds_dairy_meat_d, ingreds_sweets_d = self.get_ingredients_based_on_nutrition_habit(dinner.type)
+
+            ingredients_list = ingredients_list_b.union(ingredients_list_l,ingredients_list_d)
+            ingreds_grains = ingreds_grains_b.union(ingreds_grains_l,ingreds_grains_d)
+            ingreds_veg_fru = ingreds_veg_fru_b.union(ingreds_veg_fru_l,ingreds_veg_fru_d)
+            ingreds_dairy_meat = ingreds_dairy_meat_b.union(ingreds_dairy_meat_l,ingreds_dairy_meat_d)
+            ingreds_sweets = ingreds_sweets_b.union(ingreds_sweets_l,ingreds_sweets_d)
+
+            #mts= 0.25 if breakfast.type != 's' else 0.125
+            b_indexes = []
+            b_1 = ingreds_grains_b[randint(0,ingreds_grains_b.count()-1)]
+            b_2 = ingreds_veg_fru_b[randint(0,ingreds_veg_fru_b.count()-1)]
+            b_3 = ingreds_dairy_meat_b[randint(0,ingreds_dairy_meat_b.count()-1)]
+            if (random() < 0.3):
+                b_4 = ingreds_sweets_b[randint(0,ingreds_sweets_b.count()-1)]
+            else:
+                new = ingreds_veg_fru_b.exclude(key=b_2.key)
+                b_4 = new[randint(0,new.count()-1)]
+            
+            ingredients_b = Ingredients.objects.filter(key__in=[b_1.key, b_2.key, b_3.key, b_4.key])
+            ingredients_b.update(portion_size=1.0) #100g
+            breakfast.ingredients.set(ingredients_b)
+            breakfast.set_nutrients()
+            print('first solution BREAKFAST')
+            print('now start optimization')
+            print(breakfast.ingredients.all())
+            
+            #mts= 0.25 if lunch.type != 's' else 0.125
+            l_indexes = []
+            
+            new = ingreds_grains_l.exclude(key=b_1.key)
+            l_1 = new[randint(0,new.count()-1)]
+
+            new = ingreds_veg_fru_l.exclude(key__in=[b_2.key,b_4.key])
+            l_2 = ingreds_veg_fru_l[randint(0,new.count()-1)]
+
+            new = new.exclude(key=l_2.key)
+            l_3 = new[randint(0,new.count()-1)]
+
+            new = new.exclude(key__in=[l_2.key,l_3.key])
+            l_4 = new[randint(0,new.count()-1)]
+
+            new = ingreds_dairy_meat_l.exclude(key=b_3.key)
+            l_5 = new[randint(0,new.count()-1)]
+            
+            ingredients_l = Ingredients.objects.filter(key__in=[l_1.key, l_2.key, l_3.key, l_4.key, l_5.key])
+            ingredients_l.update(portion_size=1.0) #100g
+            lunch.ingredients.set(ingredients_l)
+            lunch.set_nutrients()
+            print('first solution LUNCH')
+            print('now start optimization')
+            print(lunch.ingredients.all())
+
+            
+            #mts= 0.25 if dinner.type != 's' else 0.125
+            d_indexes = []
+            new = ingreds_grains_l.exclude(key__in=[b_1.key,l_1.key])
+            d_1 = new[randint(0,new.count()-1)]
+
+            new = ingreds_veg_fru_d.exclude(key__in=[b_2.key, b_4.key,l_2.key,l_3.key,l_4.key])
+            d_2 = new[randint(0,new.count()-1)]
+            new = new.exclude(key=d_2.key)
+            d_3 = new[randint(0,new.count()-1)]
+
+            new = ingreds_dairy_meat_d.exclude(key__in=[b_3.key, l_5.key])
+            d_4 = new[randint(0,new.count()-1)]
+            if (random() < 0.3):
+                new = ingreds_dairy_meat_d.exclude(key__in=[b_3.key, l_5.key, d_4.key])
+                d_5 = new[randint(0,new.count()-1)]
+            else:
+                new = ingreds_veg_fru_d.exclude(key__in=[b_2.key, b_4.key,l_2.key,l_3.key,l_4.key,d_2.key,d_3.key])
+                d_5 = new[randint(0,new.count()-1)]
+
+            ingredients_d = Ingredients.objects.filter(key__in=[d_1.key, d_2.key, d_3.key, d_4.key, d_5.key])
+            ingredients_d.update(portion_size=1.0) #100g
+            dinner.ingredients.set(ingredients_d)
+            dinner.set_nutrients()
+            print('first solution DINNER')
+            print('now start optimization')
+            print(dinner.ingredients.all())
+
+
+            tmp = Meal(name='first tmp', type='b')
+            tmp.save()
+            ingreds_tmp = breakfast.ingredients.all().union(lunch.ingredients.all(),dinner.ingredients.all())
+            #tmp.ingredients.set(breakfast.ingredients.all())
+            #tmp.save()
+            #tmp.ingredients.set(lunch.ingredients.all())
+            #tmp.save()
+            tmp.ingredients.set(ingreds_tmp)
+            tmp.save()
+            #tmp.set_nutrients()
+            print(tmp.ingredients.all().count())
+            print(tmp.ingredients.all())
+            find_portion_size_by_pulp(prob,limits,ingreds_tmp)
+            if LpStatus[prob.status] != 'Optimal':
+                prob = LpProblem("The Portion Size min kcal new", LpMinimize)
+            #return
+            #dfs(ingredients_list, ingreds_grains, ingreds_veg_fru, ingreds_dairy_meat, ingreds_sweets, meal=tmp,limits=limits, indexes=b_indexes,recursion_steps=10)
+            tmp.name = str(tmp.name) + 'success'
+            tmp.save()
+            tmp.set_nutrients()
+            #print(tmp.ingredients.all().count())
+            nutrient_differences = tmp.can_add2(tmp.get_nutrients(),limits)
+            #print_differences(nutrient_differences)
+
+            tmp_ingredients_list = []
+            for i in tmp.ingredients.all():
+                tmp_ingredients_list.append((i.key, i.portion_size))
+
+            tmp.ingredients_list = json.dumps(tmp_ingredients_list)
+            tmp.save()
+        return tmp.get_ingredients()
+
+    def create_meals_for_week(self):
+        limits_week = self.get_nutrient_limits(meal_type_size=1.0)
+        for key in limits_week:
+            limits_week[key] = (limits_week[key][0]*3,limits_week[key][1]*3)
+        
+        meal_list = []
+        for i in range(0,2):
+            meals = self.create_meal()
+            #print(meals)
+            meal_list += meals
+        print('##### FOUND MEALS FOR WEEK #####')
+        print(meal_list)
+        nutrients = {'carbs':0.0,'fat':0.0,'protein':0.0,
+        'vitamin_a':0.0,'vitamin_b1':0.0,'vitamin_b2':0.0,'vitamin_b2':0.0,'vitamin_b3':0.0,
+        'vitamin_b5':0.0,'vitamin_b6':0.0,'vitamin_b7':0.0,'vitamin_b9':0.0,
+        'vitamin_c':0.0,'vitamin_e':0.0,'vitamin_k':0.0,'sodium':0.0,'potassium':0.0,'calcium':0.0,
+        'magnesium':0.0,'phosphorus':0.0,'iron':0.0,'zinc':0.0,'copper':0.0,'manganese':0.0,'fluoride':0.0,'iodide':0.0}
+        differs = [0]*int(len(nutrients))
+        meal_nutrients = {'carbs':0.0,'fat':0.0,'protein':0.0,
+        'vitamin_a':0.0,'vitamin_b1':0.0,'vitamin_b2':0.0,'vitamin_b2':0.0,'vitamin_b3':0.0,
+        'vitamin_b5':0.0,'vitamin_b6':0.0,'vitamin_b7':0.0,'vitamin_b9':0.0,
+        'vitamin_c':0.0,'vitamin_e':0.0,'vitamin_k':0.0,'sodium':0.0,'potassium':0.0,'calcium':0.0,
+        'magnesium':0.0,'phosphorus':0.0,'iron':0.0,'zinc':0.0,'copper':0.0,'manganese':0.0,'fluoride':0.0,'iodide':0.0}
+        for n in nutrients:
+            print(n)
+            for ingred_list in meal_list:
+                i = Ingredients.objects.get(key=ingred_list[0])
+                meal_nutrients[n] += i.get_value_by_key(n) * ingred_list[1]
+            #i = nutrients.index(n)
+            #print(n)
+            print(meal_nutrients[n])
+            print(limits_week[n])
+            if meal_nutrients[n] > limits_week[n][1]:
+                differs = meal_nutrients[n]-limits_week[n][1]
+                nutrients[n] = round(differs,9)
+            if meal_nutrients[n] < limits_week[n][0]:
+                differs= meal_nutrients[n]-limits_week[n][0]
+                nutrients[n] = round(differs,9)
+        print_differences(meal_nutrients)
+        print_differences(nutrients)
+
+
+def print_differences(nutrient_differences):
+    for n in nutrient_differences:
+        print(str(n) + '  '+ str(nutrient_differences[n])+'\n')
+
+def find_portion_size_by_pulp(prob,limits,ingredients_qs=None):
+    # https://www.coin-or.org/PuLP/CaseStudies/a_blending_problem.html
+
+    # Creates a list of the Ingredients
+    ingredients = ingredients_qs.values_list('key',flat=True)
+    # A dictionary of the kacl,proteins,fat,carbs,.. of each of the Ingredients is created
+    kcal = dict()
+    proteinPercent = dict()
+    fatPercent = dict()
+    carbsPercent = dict()
+    vitamin_aPercent = dict()
+    vitamin_b1Percent = dict()
+    vitamin_b2Percent = dict()
+    vitamin_b3Percent = dict()
+    vitamin_b5Percent = dict()
+    vitamin_b6Percent = dict()
+    vitamin_b7Percent = dict()
+    vitamin_b9Percent = dict()
+    vitamin_b12Percent = dict()
+    vitamin_cPercent = dict()
+    vitamin_dPercent = dict()
+    vitamin_ePercent = dict()
+    vitamin_kPercent = dict()
+    sodiumPercent = dict()
+    potassiumPercent = dict()
+    calciumPercent = dict()
+    phosphorusPercent = dict()
+    magnesiumPercent = dict()
+    ironPercent = dict()
+    zincPercent = dict()
+    copperPercent = dict()
+    manganesePercent = dict()
+    iodidePercent = dict()
+    fluoridePercent = dict()
+    for key in ingredients:
+        kcal[key] = Ingredients.objects.get(key=key).energy_kcal
+        proteinPercent[key] = Ingredients.objects.get(key=key).protein
+        fatPercent[key] = Ingredients.objects.get(key=key).fat
+        carbsPercent[key] = Ingredients.objects.get(key=key).carbs
+        vitamin_aPercent[key] = Ingredients.objects.get(key=key).vitamin_a
+        vitamin_b1Percent[key] = Ingredients.objects.get(key=key).vitamin_b1
+        vitamin_b2Percent[key] = Ingredients.objects.get(key=key).vitamin_b2
+        vitamin_b3Percent[key] = Ingredients.objects.get(key=key).vitamin_b3
+        vitamin_b5Percent[key] = Ingredients.objects.get(key=key).vitamin_b5
+        vitamin_b6Percent[key] = Ingredients.objects.get(key=key).vitamin_b6
+        vitamin_b7Percent[key] = Ingredients.objects.get(key=key).vitamin_b7
+        vitamin_b9Percent[key] = Ingredients.objects.get(key=key).vitamin_b9
+        vitamin_b12Percent[key] = Ingredients.objects.get(key=key).vitamin_b12
+        vitamin_cPercent[key] = Ingredients.objects.get(key=key).vitamin_c
+        vitamin_dPercent[key] = Ingredients.objects.get(key=key).vitamin_d
+        vitamin_ePercent[key] = Ingredients.objects.get(key=key).vitamin_e
+        vitamin_kPercent[key] = Ingredients.objects.get(key=key).vitamin_k
+        sodiumPercent[key] = Ingredients.objects.get(key=key).sodium
+        potassiumPercent[key] = Ingredients.objects.get(key=key).potassium
+        calciumPercent[key] = Ingredients.objects.get(key=key).calcium
+        phosphorusPercent[key] = Ingredients.objects.get(key=key).phosphorus
+        magnesiumPercent[key] = Ingredients.objects.get(key=key).magnesium
+        ironPercent[key] = Ingredients.objects.get(key=key).iron
+        zincPercent[key] = Ingredients.objects.get(key=key).zinc
+        copperPercent[key] = Ingredients.objects.get(key=key).copper
+        manganesePercent[key] = Ingredients.objects.get(key=key).manganese
+        iodidePercent[key] = Ingredients.objects.get(key=key).iodide
+        fluoridePercent[key] = Ingredients.objects.get(key=key).fluoride
+
+    
+
+    # A dictionary called 'ingredient_vars' is created to contain the referenced Variables
+    ingredient_vars = LpVariable.dicts("Ingr",ingredients,0.0,10.0)
+    
+    # The objective function is added to 'prob' first
+    prob += lpSum([kcal[i]*ingredient_vars[i] for i in ingredients]), "Total kcal of Ingredients per meal"
+
+    # The five constraints are added to 'prob'
+    #prob += lpSum([ingredient_vars[i] for i in ingredients]) == 100, "PercentagesSum"
+    prob += lpSum([kcal[i]*ingredient_vars[i] for i in ingredients]) >= limits['energy_kcal'][0], "KcalRequirementMin"
+    prob += lpSum([proteinPercent[i] * ingredient_vars[i] for i in ingredients]) >= limits['protein'][0], "ProteinRequirementMin"
+    prob += lpSum([fatPercent[i] * ingredient_vars[i] for i in ingredients]) >= limits['fat'][0], "FatRequirementMin"
+    prob += lpSum([carbsPercent[i] * ingredient_vars[i] for i in ingredients]) >= limits['carbs'][0], "CarbsRequirementMin"
+    #prob += lpSum([vitamin_aPercent[i] * ingredient_vars[i] for i in ingredients]) >= limits['vitamin_a'][0], "VitaminARequirementMin"
+    #prob += lpSum([sodiumPercent[i] * ingredient_vars[i] for i in ingredients]) >= limits['sodium'][0], "SodiumRequirementMin"
+    prob += lpSum([kcal[i]*ingredient_vars[i] for i in ingredients]) <= limits['energy_kcal'][1], "KcalRequirementMax"
+    prob += lpSum([proteinPercent[i] * ingredient_vars[i] for i in ingredients]) <= limits['protein'][1], "ProteinRequirementMax"
+    prob += lpSum([fatPercent[i] * ingredient_vars[i] for i in ingredients]) <= limits['fat'][1], "FatRequirementMax"
+    prob += lpSum([carbsPercent[i] * ingredient_vars[i] for i in ingredients]) <= limits['carbs'][1], "CarbsRequirementMax"
+    
+    '''prob += lpSum([vitamin_aPercent[i] * ingredient_vars[i] for i in ingredients]) == limits['vitamin_a'][0], "VitaminARequirement"
+    prob += lpSum([vitamin_b1Percent[i] * ingredient_vars[i] for i in ingredients]) <= limits['vitamin_b1'][1], "VitaminB1RequirementMax"
+    prob += lpSum([vitamin_b2Percent[i] * ingredient_vars[i] for i in ingredients]) <= limits['vitamin_b2'][1], "VitaminB2RequirementMax"
+    prob += lpSum([vitamin_b3Percent[i] * ingredient_vars[i] for i in ingredients]) <= limits['vitamin_b3'][1], "VitaminB3RequirementMax"
+    prob += lpSum([vitamin_b5Percent[i] * ingredient_vars[i] for i in ingredients]) <= limits['vitamin_b5'][1], "VitaminB5RequirementMax"
+    prob += lpSum([vitamin_b6Percent[i] * ingredient_vars[i] for i in ingredients]) <= limits['vitamin_b6'][1], "VitaminB6RequirementMax"
+    prob += lpSum([vitamin_b7Percent[i] * ingredient_vars[i] for i in ingredients]) <= limits['vitamin_b7'][1], "VitaminB7RequirementMax"
+    prob += lpSum([vitamin_b9Percent[i] * ingredient_vars[i] for i in ingredients]) <= limits['vitamin_b9'][0], "VitaminB9Requirement"
+    #prob += lpSum([vitamin_b12Percent[i] * ingredient_vars[i] for i in ingredients]) <= limits['vitamin_b12'][1], "VitaminB12RequirementMax"
+    prob += lpSum([vitamin_cPercent[i] * ingredient_vars[i] for i in ingredients]) <= limits['vitamin_c'][0], "VitaminCRequirement"
+    #prob += lpSum([vitamin_dPercent[i] * ingredient_vars[i] for i in ingredients]) <= limits['vitamin_d'][1], "VitaminDRequirementMax"
+    prob += lpSum([vitamin_ePercent[i] * ingredient_vars[i] for i in ingredients]) <= limits['vitamin_e'][1], "VitaminERequirementMax"
+    prob += lpSum([vitamin_kPercent[i] * ingredient_vars[i] for i in ingredients]) <= limits['vitamin_k'][1], "VitaminKRequirementMax"
+    
+    prob += lpSum([sodiumPercent[i] * ingredient_vars[i] for i in ingredients]) <= limits['sodium'][1], "SodiumRequirementMax"
+    prob += lpSum([potassiumPercent[i] * ingredient_vars[i] for i in ingredients]) <= limits['sodium'][1], "PotassiumRequirementMax"
+    prob += lpSum([calciumPercent[i] * ingredient_vars[i] for i in ingredients]) <= limits['sodium'][1], "CalciumRequirementMax"
+    prob += lpSum([phosphorusPercent[i] * ingredient_vars[i] for i in ingredients]) <= limits['sodium'][1], "PhosphorusRequirementMax"
+    prob += lpSum([magnesiumPercent[i] * ingredient_vars[i] for i in ingredients]) <= limits['sodium'][1], "MagnesiumRequirementMax"
+    prob += lpSum([ironPercent[i] * ingredient_vars[i] for i in ingredients]) <= limits['sodium'][1], "IronRequirementMax"
+    prob += lpSum([zincPercent[i] * ingredient_vars[i] for i in ingredients]) <= limits['sodium'][1], "ZincRequirementMax"
+    prob += lpSum([copperPercent[i] * ingredient_vars[i] for i in ingredients]) <= limits['sodium'][1], "CopperRequirementMax"
+    prob += lpSum([manganesePercent[i] * ingredient_vars[i] for i in ingredients]) <= limits['sodium'][1], "ManganeseRequirementMax"
+    prob += lpSum([iodidePercent[i] * ingredient_vars[i] for i in ingredients]) <= limits['sodium'][1], "IodideRequirementMax"
+    prob += lpSum([fluoridePercent[i] * ingredient_vars[i] for i in ingredients]) <= limits['sodium'][1], "FluoridRequirementMax"'''
+
+    '''vitamin_a_LHS = LpAffineExpression([(vitamin_aPercent[i], ingredient_vars[i]) for i in ingredients ])
+    vitamin_a_elastic = LpConstraint(e=vitamin_a_LHS,sense=0,rhs=limits['vitamin_a'][0])
+    elasticProblem_1 = vitamin_a_elastic.makeElasticSubProblem(penalty=1, proportionFreeBound = 0.125)
+
+    prob.extend(elasticProblem_1)
+
+    vitamin_b9_LHS = LpAffineExpression([(vitamin_b9Percent[i], ingredient_vars[i]) for i in ingredients ])
+    vitamin_b9_elastic = LpConstraint(e=vitamin_b9_LHS,sense=0,rhs=limits['vitamin_b9'])
+    elasticProblem_2 = vitamin_b9_elastic.makeElasticSubProblem(penalty=1, proportionFreeBound = 0.167)
+
+    prob.extend(elasticProblem_2)'''
+
+    '''rhs = (limits['protein'][0]+limits['protein'][1])/2
+    print('RHS: ' + str(rhs))
+    protein_LHS = LpAffineExpression([(ingredient_vars[i], proteinPercent[i]) for i in ingredients ])
+    protein_elastic = LpConstraint(e=protein_LHS,sense=0,name='ProteinElastic',rhs=rhs)
+    elasticProblem_1 = protein_elastic.makeElasticSubProblem(penalty=1, proportionFreeBound = 0.3)
+
+    prob.extend(elasticProblem_1)
+
+    rhs = (limits['carbs'][0]+limits['carbs'][1])/2
+    print('RHS: ' + str(rhs))
+    carbs_LHS = LpAffineExpression([(ingredient_vars[i], carbsPercent[i]) for i in ingredients ])
+    carbs_elastic = LpConstraint(e=carbs_LHS,sense=0,name='CarbsElastic',rhs=rhs)
+    elasticProblem_2 = carbs_elastic.makeElasticSubProblem(penalty=1, proportionFreeBound = 0.3)
+
+    prob.extend(elasticProblem_2)'''
+
+    # The problem data is written to an .lp file
+    prob.writeLP("BreakfastModel.lp")
+
+    # The problem is solved using PuLP's choice of Solver
+    prob.solve()
+    # The status of the solution is printed to the screen
+    print("Status:", LpStatus[prob.status])
+
+    # Each of the variables is printed with it's resolved optimum value
+    
+    print(prob.variables())
+    for v in prob.variables():#[3:len(prob.variables())-3]:
+        print(str(v.name)+ "=" +str(v.varValue))
+        key = str(v.name)
+        key = key.split('_')[1]
+        print(key)
+        ingred = Ingredients.objects.get(key=key)
+        ingred.portion_size = v.varValue
+        ingred.save()
+
+    # The optimised objective function value is printed to the screen
+    print("Total Cost of Ingredients per can = " + str(value(prob.objective)))
+    return prob
+
+
+def do_increase_portion_size(max_key_value,has,nutrient_difference, meal):
+    print(' DO INCREAE START')
+    print(max_key_value)
+    print(nutrient_difference)
+    ingredient = Ingredients.objects.get(key=max_key_value[1])
+    print('old portion size: ' + str(ingredient.portion_size))
+    ingredient.old_portion_size = ingredient.portion_size
+    ingredient.save()
+    portion_size_in_grams = ingredient.portion_size*100
+    expected_nutrient_value = has*ingredient.portion_size-nutrient_difference
+    current_nutrient_value = has*ingredient.portion_size
+    print(str(ingredient) + ' has '+ str(current_nutrient_value) +' and increased to '+ str(expected_nutrient_value))
+    increased_to_in_grams = portion_size_in_grams * expected_nutrient_value/current_nutrient_value
+    increased_to = increased_to_in_grams/100
+    print('increase_by ' + str(increased_to-ingredient.portion_size))
+    new_portion_size = increased_to#round(increased_to, 4)
+    if not increased_to <= 0.00:
+        ingredient.portion_size = new_portion_size
+        ingredient.new_portion_size = ingredient.new_portion_size
+        ingredient.save()
+        print('new portion size: ' + str(ingredient.portion_size))
+        print(' DO INCREAE START')
+        return increased_to
+    print(' DO INCREAE START')
+    return 
+
+def do_reduce_portion_size(max_key_value,key_value,has,nutrient_difference, meal, ingredients,ingreds_grains, ingreds_veg_fru, ingreds_dairy_meat, ingreds_sweets):
+    """
+    formula: current_portion_size * ((has*current_portion_size)-needs)/(has*current_portion_size) = new_portion_size
+    """
+    print(' DO REDUCE START')
+    print(max_key_value)
+    print(nutrient_difference)
+    ingredient = Ingredients.objects.get(key=max_key_value[1])
+    print('old portion size: ' + str(ingredient.portion_size))
+    ingredient.old_portion_size = ingredient.portion_size
+    ingredient.save()
+    expected_nutrient_value = has*ingredient.portion_size-nutrient_difference
+    current_nutrient_value = has*ingredient.portion_size
+
+    print('has: ' + str(has))
+    print('nutrient_difference: ' + str(nutrient_difference))
+    print('current_nutrient_value: ' + str(current_nutrient_value))
+    print('expected_nutrient_value: ' + str(expected_nutrient_value))
+    portion_size_in_grams = ingredient.portion_size*100
+    
+    print(str(ingredient) + ' has '+ str(current_nutrient_value) +' and reduced to '+ str(expected_nutrient_value))
+    reduced_to_in_grams = portion_size_in_grams * expected_nutrient_value/current_nutrient_value
+    reduced_to = reduced_to_in_grams/100
+    print('reduce_by ' + str(ingredient.portion_size-reduced_to))
+    reduce_by = ingredient.portion_size-reduced_to
+    new_portion_size = reduced_to#round(reduced_to, 4)
+    if not reduced_to <= 0.00:
+        ingredient.portion_size = new_portion_size
+        ingredient.new_portion_size = ingredient.new_portion_size
+        ingredient.save()
+        print('new portion size: ' + str(ingredient.portion_size))
+        print(' DO REDUCE END')
+        return reduced_to
+    print('MAYBE REDUCE MORE INGREDS')
+    print(key_value)
+    #do_reduce_portion_size_more_ingreds(max_key_value,key_value,has,nutrient_difference, meal, ingredients)
+    #switch_ingredient(ingredients,ingreds_grains, ingreds_veg_fru, ingreds_dairy_meat, ingreds_sweets, meal,ingredient)
+    print(' DO REDUCE END')
+    return
+
+def do_reduce_portion_size_more_ingreds(max_key_value,key_value,has,nutrient_difference, meal, ingredients):
+    """
+    formula: current_portion_size * ((has*current_portion_size)-needs)/(has*current_portion_size) = new_portion_size
+    """
+    print(max_key_value)
+    print(nutrient_difference)
+    ingredient = Ingredients.objects.get(key=max_key_value[1])
+    print('old portion size: ' + str(ingredient.portion_size))
+    ingredient.old_portion_size = ingredient.portion_size
+    ingredient.save()
+    portion_size_in_grams = ingredient.portion_size*100
+    expected_nutrient_value = has*ingredient.portion_size-nutrient_difference
+    current_nutrient_value = has*ingredient.portion_size
+    print(str(ingredient) + ' has '+ str(current_nutrient_value) +' and reduced to '+ str(expected_nutrient_value))
+    reduced_to_in_grams = portion_size_in_grams * expected_nutrient_value/current_nutrient_value
+    reduced_to = reduced_to_in_grams/100
+    print('reduce_by ' + str(ingredient.portion_size-reduced_to))
+    new_portion_size = reduced_to#round(reduced_to, 4)
+    if not reduced_to <= 0.00:
+        ingredient.portion_size = new_portion_size
+        ingredient.new_portion_size = ingredient.new_portion_size
+        ingredient.save()
+        print('new portion size: ' + str(ingredient.portion_size))
+        return reduced_to
+    print('MAYBE REDUCE MORE INGREDS')
+    print(key_value)
+    #switch_ingredient(ingredients,ingreds_grains, ingreds_veg_fru, ingreds_dairy_meat, ingreds_sweets, meal,ingredient)
+    return
+
+def switch_ingredient(ingredients,ingreds_grains, ingreds_veg_fru, ingreds_dairy_meat, ingreds_sweets, meal,to_switch):
+    print('new ingred')
+    print(to_switch)
+    #index = list(ingredients.values_list('key', flat=True)).index(to_switch.key)
+    #index = index+randint(-10,10)
+    used = list(meal.ingredients.values_list('key',flat=True))
+    print(used)
+    meal.ingredients.remove(to_switch)
+    ingredients = ingredients.exclude(key__in=used)
+
+    print(type(ingreds_grains))
+    if ingreds_grains.filter(key=to_switch.key):
+        ingredis = ingreds_grains.exclude(key__in=used)
+        new_ingred_in_same_cat = ingreds_grains[randint(0,ingreds_grains.count()-1)]
+    
+    if ingreds_veg_fru.filter(key=to_switch.key):
+        ingredis = ingreds_veg_fru.exclude(key__in=used)
+        new_ingred_in_same_cat = ingreds_veg_fru[randint(0,ingreds_veg_fru.count()-1)]
+    
+    if ingreds_dairy_meat.filter(key=to_switch.key):
+        ingredis = ingreds_dairy_meat.exclude(key__in=used)
+        new_ingred_in_same_cat = ingreds_dairy_meat[randint(0,ingreds_dairy_meat.count()-1)]
+    
+    if ingreds_sweets.filter(key=to_switch.key):
+        ingredis = ingreds_sweets.exclude(key__in=used)
+        new_ingred_in_same_cat = ingreds_sweets[randint(0,ingreds_sweets.count()-1)]
+
+    print(new_ingred_in_same_cat)
+    new_ingred_in_same_cat.portion_size = 1.0
+    new_ingred_in_same_cat.save()
+    meal.ingredients.add(new_ingred_in_same_cat)
+    meal.set_nutrients()
+
+def find_ingredient_to_inc_red(meal,nutrient):
+    """
+    finds the ingredient which has the ḿax desired nutrient to increase/reduce but at the same time has
+    the min fat AND sugar or the min fat OR sugar
+    """
+    print(' FIND INGRED START')
+    key_value_not_portioned = list(meal.ingredients.all().values_list(nutrient,'portion_size','key',flat=False))
+    key_value = list(meal.ingredients.all().values_list(nutrient,'key',flat=False))
+    key_value_portioned = []
+    for triplet in key_value_not_portioned:
+        key_value_portioned.append((triplet[0]*triplet[1],triplet[2]))
+    key_fat = list(meal.ingredients.all().values_list('fat','key',flat=False))
+    key_sugar_total = list(meal.ingredients.all().values_list('sugar_total','key',flat=False))
+    if nutrient == 'vitamin_b12' or nutrient == 'vitamin_d':
+        #for v in key_value:
+            #print(v)
+        pass
+    max_key_value = None
+    key_value_portioned.sort(key=itemgetter(0), reverse=True)
+    key_value.sort(key=itemgetter(0), reverse=True)
+    max_key_value_portioned = max(key_value_portioned,key=itemgetter(0))
+    for pair in key_value:
+        if pair[1]==max_key_value_portioned[1]:
+            max_key_value = pair 
+    print(key_value_not_portioned)
+    print(key_value)
+    max_key_value = max(key_value,key=itemgetter(0))
+    found_best_ingredient = None
+    if nutrient in ['carbs','protein','fat','sugar_total']:
+        min_key_fat = min(key_fat,key=itemgetter(0))
+        min_key_sugar_total = min(key_sugar_total,key=itemgetter(0))
+        key_fat.sort(key=itemgetter(0))
+        key_sugar_total.sort(key=itemgetter(0))
+        print(key_fat)
+        print(key_sugar_total)
+        print(key_value[0][1])
+        
+        for j in range(0,len(key_value)-1):
+            if key_value[j][0] == 0.0:
+                continue
+            if key_value[j][1]==key_fat[j][1]==key_sugar_total[j][1]:
+                found_best_ingredient = key_value[j]
+                break
+        if found_best_ingredient is None:
+            for j in range(0,len(key_value)-1):
+                if key_value[j][0] == 0.0:
+                    continue
+                if key_value[j][1]==key_fat[j][1]:
+                    found_best_ingredient = key_value[j]
+                    break
+                if key_value[j][1]==key_sugar_total[j][1]:
+                    found_best_ingredient = key_value[j]
+                    break
+
+    print('\n ****** TAAAAAAAADAAAA ****** \n')
+    print(found_best_ingredient)
+    max_key_value = max_key_value if found_best_ingredient is None else found_best_ingredient
+    print(max_key_value)
+    print(' FIND INGRED END')
+    return max_key_value, key_value
+
+def convert_to_grams(has,needs,nutrient):
+    if 'vitamin' in nutrient or nutrient in ['iron','zinc','copper','manganese','fluoride','iodide'] :
+        has = has/1000000
+        needs = needs/1000000
+    if nutrient in ['fat','carbs','protein','fibre','sodium','potassium','calcium','magnesium','phosphorus']:
+        has = has/1000
+        needs = needs/1000
+    return has, needs
+
+def dfs(ingredients_keies,ingreds_grains, ingreds_veg_fru, ingreds_dairy_meat, ingreds_sweets, meal=None, limits=None,indexes=None,recursion_steps=100,max_key_value=None):
+    print('START\n')
+    print('dfs')
+    print('recursion_steps left: ' + str(recursion_steps))
+    if recursion_steps == 0:
+        print('END DUE TO STEPS \n')
+        switch_ingredient(ingredients_keies, ingreds_grains, ingreds_veg_fru, ingreds_dairy_meat, ingreds_sweets, meal,Ingredients.objects.get(key=max_key_value[1]))
+        recursion_steps = recursion_steps
+    meal_nutrients = meal.get_nutrients()
+    #print(meal_nutrients)
+    nutrient_differences = meal.can_add2(meal_nutrients,limits)
+    print_differences(nutrient_differences)
+    value = 0.0
+    for i in nutrient_differences:
+    #value = next(item for item in nutrient_differences[1] if item !=0)
+        meal_nutrients = meal.get_nutrients()
+        nutrient_differences_new = meal.can_add2(meal_nutrients,limits)
+        value = nutrient_differences_new[i]
+        nutrient = i
+        print(nutrient)
+
+        max_key_value, key_value = find_ingredient_to_inc_red(meal,nutrient)
+        if max_key_value[0] == 0.0:
+            print('Ingredients dont hav ' + str(nutrient) + ' so just skip')
+            continue
+        ingred_with_max_nutrient = meal.ingredients.filter(key=max_key_value[1])
+        has = max_key_value[0]
+        close_enough = False
+        if 'vitamin' in nutrient:
+            close_enough = math.isclose(0.0,value,abs_tol=100)
+            print('close enough: ' + str(close_enough))
+        print(str(ingred_with_max_nutrient[0]) + ' has : '+ str(has) + ' needs ' + str(value))
+        has, value = convert_to_grams(has,value,nutrient)
+        print(str(ingred_with_max_nutrient[0]) + ' has : '+ str(has) + ' needs ' + str(value))
+
+        if value < 0 and close_enough == False:
+            do_increase_portion_size(max_key_value,has,value,meal)
+            #print(meal_nutrients)
+            meal.set_nutrients()
+            meal_nutrients = meal.get_nutrients()
+            print_differences(meal.can_add2(meal_nutrients,limits))
+            #print(meal_nutrients)
+        if value > 0 and close_enough == False:
+            do_reduce_portion_size(max_key_value,key_value,has,value,meal, ingredients_keies,ingreds_grains, ingreds_veg_fru, ingreds_dairy_meat, ingreds_sweets)
+            #print(meal_nutrients)
+            meal.set_nutrients()
+            meal_nutrients = meal.get_nutrients()
+            print_differences(meal.can_add2(meal_nutrients,limits))
+            #print(meal_nutrients)
+        
+        print('\n')
+    print(' ################# OOOMMMGGGG ####################')
+    vitamins = [abs(nutrient_differences_new[n]) for n in nutrient_differences_new if 'vitamin_' in n]
+    macro_nutrients = [abs(nutrient_differences_new[n]) for n in nutrient_differences_new if n in ['fat','protein','carbs','fibre']]
+    sum_of_vitamins = sum(vitamins)
+    sum_of_macro_nutrients = sum(macro_nutrients)
+    vitamins_done = math.isclose(0.0,sum_of_vitamins,abs_tol=3000) # u can hav +/- 3mg viatmins a day, since a lot wont get used actually
+    macro_nutrients_done = math.isclose(0.0,sum_of_macro_nutrients,abs_tol=150) # u can hav +/- 150g macro_nutirients a day
+    print('Vitamins done: ' + str(vitamins_done))
+
+    if not(macro_nutrients_done and vitamins_done):
+        recursion_steps -=1
+        return dfs(ingredients_keies, ingreds_grains, ingreds_veg_fru, ingreds_dairy_meat, ingreds_sweets, meal, limits, indexes, recursion_steps,max_key_value=max_key_value)
+    print('END \n')
+    for ing in meal.ingredients.all():
+        print(str(ing.name) + ' with portion_size: ' + str(ing.portion_size))
+    return meal.ingredients.all()
+
+
+class MealType(models.Model):
+    name = models.CharField('name', max_length=200, default='breakfast')
+    type = models.CharField('type', max_length=2, default='breakfast',
+                            choices=(('b', 'breakfast'), ('l', 'lunch'), ('d', 'dinner'), ('s', 'snack')))
+    size = models.FloatField('size', default=0.25)
+    size_snack = models.FloatField('size_snack', default=0.125)
+
+    def __str__(self):
+        return self.name
+
+
+# meal size -> 3/4 (b+l+d) + 1/4 (2 snacks)
+# b -> 4 ingredients
+# l -> 5 ingredients
+# d -> 5 ingredients
+# s -> 2 ingredients
+class Meal(models.Model):
+    name = models.CharField('name', max_length=200, default='Salad')
+    type = models.CharField('type', max_length=2, default='breakfast',
+                            choices=(('b', 'breakfast'), ('l', 'lunch'), ('d', 'dinner'), ('s', 'snack')))
+    ingredients = models.ManyToManyField('Ingredients', related_name='ingredients')
+    event = models.ManyToManyField('schedule.Event', related_name='event')
+
+    energy_kcal = models.FloatField('energy (kcal)', null=True, blank=True)
+    energy_kj = models.FloatField('energy (kJ)', null=True, blank=True)
+    carbs = models.FloatField('carbohydrates', null=True, blank=True)
+    fat = models.FloatField('fat', null=True, blank=True)
+    protein = models.FloatField('protein', null=True, blank=True)
+    fibre = models.FloatField('fibre', null=True, blank=True)
+    sugar_total= models.FloatField('sugar total', null=True, blank=True)
+    sum_of_saturated_fatty_acids = models.FloatField('sum of saturated fatty acids', null=True, blank=True)
+    sum_of_monounsaturated_fatty_acids = models.FloatField('sum of monounsaturated fatty acids', null=True, blank=True)
+    sum_of_polyunsaturated_fatty_acids = models.FloatField('sum of polyunsaturated fatty acids', null=True, blank=True)
+    lactose = models.FloatField('lactose(mg)', null=True, blank=True)
+    fructose = models.FloatField('fructose(mg)', null=True, blank=True)
+
+    # vitamins
+    vitamin_a = models.FloatField('vitamin A(µg)', null=True, blank=True)
+    vitamin_b1 = models.FloatField('vitamin B1(µg)', null=True, blank=True)
+    vitamin_b2 = models.FloatField('vitamin B2(µg)', null=True, blank=True)
+    vitamin_b3 = models.FloatField('vitamin B3(µg)', null=True, blank=True)
+    vitamin_b5 = models.FloatField('vitamin B5(µg)', null=True, blank=True)
+    vitamin_b6 = models.FloatField('vitamin B6 µg)', null=True, blank=True)
+    vitamin_b7 = models.FloatField('vitamin B7(µg)', null=True, blank=True)
+    vitamin_b9 = models.FloatField('vitamin B9(µg)', null=True, blank=True)
+    vitamin_b12 = models.FloatField('vitamin B12(µg)', null=True, blank=True)
+    vitamin_c = models.FloatField('vitamin C(µg)', null=True, blank=True)
+    vitamin_d = models.FloatField('vitamin D(µg)', null=True, blank=True)
+    vitamin_e = models.FloatField('vitamin E(µg)', null=True, blank=True)
+    vitamin_k = models.FloatField('vitamin K(µg)', null=True, blank=True)
+
+    # minerals
+    sodium = models.FloatField('sodium(mg)', null=True, blank=True)
+    potassium = models.FloatField('potassium(mg)', null=True, blank=True)
+    calcium = models.FloatField('calcium(mg)', null=True, blank=True)
+    magnesium = models.FloatField('magnesium(mg)', null=True, blank=True)
+    # not that necessary
+    phosphorus = models.FloatField('phosphorus(mg)', null=True, blank=True)
+    sulphur = models.FloatField('sulphor(mg)', null=True, blank=True)
+    chloride = models.FloatField('chloride(mg)', null=True, blank=True)
+
+    # trace elements
+    iron = models.FloatField('iron(µg)', null=True, blank=True)
+    zinc = models.FloatField('zinc(µg)', null=True, blank=True)
+    copper = models.FloatField('copper(µg)', null=True, blank=True)
+    manganese = models.FloatField('mangnese(µg)', null=True, blank=True)
+    fluoride = models.FloatField('fluoride(µg)', null=True, blank=True)
+    iodide = models.FloatField('iodide(µg)', null=True, blank=True)
+    ingredients_list = models.CharField('Zutaten-Liste', null=True, blank=True, max_length=200)
+
+    def __str__(self):
+        return self.name
+
+    def get_nutrients(self):
+        nutrients = Meal.objects.filter(id=self.id).values('energy_kcal','energy_kj','carbs', 'fat','protein','fibre','sugar_total',
+            'sum_of_saturated_fatty_acids','sum_of_monounsaturated_fatty_acids','sum_of_polyunsaturated_fatty_acids','lactose','fructose','vitamin_a',
+            'vitamin_b1','vitamin_b2','vitamin_b2','vitamin_b3','vitamin_b5','vitamin_b6','vitamin_b7','vitamin_b9',
+            'vitamin_b12','vitamin_c','vitamin_d','vitamin_e','vitamin_k','sodium','potassium','calcium',
+            'magnesium','phosphorus','iron','zinc','copper','manganese','fluoride','iodide')
+        return nutrients[0]
+
+    
+    def set_nutrients(self):
+        #print('no portion size ' + str(self.ingredients.all().aggregate(fat__sum=Coalesce(Sum(F('fat')),0))['fat__sum']))
+        #print('portion size ' + str(self.ingredients.all().aggregate(fat__sum=Coalesce(Sum(F('fat')*F('portion_size')),0))['fat__sum']))
+        self.energy_kcal = round(self.ingredients.all().aggregate(energy_kcal__sum=Coalesce(Sum(F('energy_kcal')*F('portion_size')),0))['energy_kcal__sum'],9)
+        self.energy_kj = round(self.ingredients.all().aggregate(energy_kj__sum=Coalesce(Sum(F('energy_kj')*F('portion_size')),0))['energy_kj__sum'],9)
+        self.carbs = round(self.ingredients.all().aggregate(carbs__sum=Coalesce(Sum(F('carbs')*F('portion_size')),0))['carbs__sum'],9)
+        self.fat = round(self.ingredients.all().aggregate(fat__sum=Coalesce(Sum(F('fat')*F('portion_size')),0))['fat__sum'],9)
+        self.protein = round(self.ingredients.all().aggregate(protein__sum=Coalesce(Sum(F('protein')*F('portion_size')),0))['protein__sum'],9)
+        self.fibre = round(self.ingredients.all().aggregate(fibre__sum=Coalesce(Sum(F('fibre')*F('portion_size')),0))['fibre__sum'],9)
+        self.sugar_total = round(self.ingredients.all().aggregate(sugar_total__sum=Coalesce(Sum(F('sugar_total')*F('portion_size')),0))['sugar_total__sum'],9)
+        self.sum_of_saturated_fatty_acids = round(self.ingredients.all().aggregate(sum_of_saturated_fatty_acids__sum=Coalesce(Sum(F('sum_of_saturated_fatty_acids')*F('portion_size')),0))['sum_of_saturated_fatty_acids__sum'],9)
+        self.sum_of_monounsaturated_fatty_acids = round(self.ingredients.all().aggregate(sum_of_monounsaturated_fatty_acids__sum=Coalesce(Sum(F('sum_of_monounsaturated_fatty_acids')*F('portion_size')),0))['sum_of_monounsaturated_fatty_acids__sum'],9)
+        self.sum_of_polyunsaturated_fatty_acids = round(self.ingredients.all().aggregate(sum_of_polyunsaturated_fatty_acids__sum=Coalesce(Sum(F('sum_of_polyunsaturated_fatty_acids')*F('portion_size')),0))['sum_of_polyunsaturated_fatty_acids__sum'],9)
+        self.lactose = round(self.ingredients.all().aggregate(lactose__sum=Coalesce(Sum(F('lactose')*F('portion_size')),0))['lactose__sum'],9)
+        self.fructose = round(self.ingredients.all().aggregate(fructose__sum=Coalesce(Sum(F('fructose')*F('portion_size')),0))['fructose__sum'],9)
+
+        self.vitamin_a = round(self.ingredients.all().aggregate(vitamin_a__sum=Coalesce(Sum(F('vitamin_a')*F('portion_size')),0))['vitamin_a__sum'],9)
+        self.vitamin_b1 = round(self.ingredients.all().aggregate(vitamin_b1__sum=Coalesce(Sum(F('vitamin_b1')*F('portion_size')),0))['vitamin_b1__sum'],9)
+        self.vitamin_b2 = round(self.ingredients.all().aggregate(vitamin_b2__sum=Coalesce(Sum(F('vitamin_b2')*F('portion_size')),0))['vitamin_b2__sum'],9)
+        self.vitamin_b3 = round(self.ingredients.all().aggregate(vitamin_b3__sum=Coalesce(Sum(F('vitamin_b3')*F('portion_size')),0))['vitamin_b3__sum'],9)
+        self.vitamin_b5 = round(self.ingredients.all().aggregate(vitamin_b5__sum=Coalesce(Sum(F('vitamin_b5')*F('portion_size')),0))['vitamin_b5__sum'],9)
+        self.vitamin_b6 = round(self.ingredients.all().aggregate(vitamin_b6__sum=Coalesce(Sum(F('vitamin_b6')*F('portion_size')),0))['vitamin_b6__sum'],9)
+        self.vitamin_b7 = round(self.ingredients.all().aggregate(vitamin_b7__sum=Coalesce(Sum(F('vitamin_b7')*F('portion_size')),0))['vitamin_b7__sum'],9)
+        self.vitamin_b9 = round(self.ingredients.all().aggregate(vitamin_b9__sum=Coalesce(Sum(F('vitamin_b9')*F('portion_size')),0))['vitamin_b9__sum'],9)
+        self.vitamin_b12 = round(self.ingredients.all().aggregate(vitamin_b12__sum=Coalesce(Sum(F('vitamin_b12')*F('portion_size')),0))['vitamin_b12__sum'],9)
+        self.vitamin_c = round(self.ingredients.all().aggregate(vitamin_c__sum=Coalesce(Sum(F('vitamin_c')*F('portion_size')),0))['vitamin_c__sum'],9)
+        self.vitamin_d = round(self.ingredients.all().aggregate(vitamin_d__sum=Coalesce(Sum(F('vitamin_d')*F('portion_size')),0))['vitamin_d__sum'],9)
+        self.vitamin_e = round(self.ingredients.all().aggregate(vitamin_e__sum=Coalesce(Sum(F('vitamin_e')*F('portion_size')),0))['vitamin_e__sum'],9)
+        self.vitamin_k = round(self.ingredients.all().aggregate(vitamin_k__sum=Coalesce(Sum(F('vitamin_k')*F('portion_size')),0))['vitamin_k__sum'],9)
+
+        self.sodium = round(self.ingredients.all().aggregate(sodium__sum=Coalesce(Sum(F('sodium')*F('portion_size')),0))['sodium__sum'],9)
+        self.potassium = round(self.ingredients.all().aggregate(potassium__sum=Coalesce(Sum(F('potassium')*F('portion_size')),0))['potassium__sum'],9)
+        self.calcium = round(self.ingredients.all().aggregate(calcium__sum=Coalesce(Sum(F('calcium')*F('portion_size')),0))['calcium__sum'],9)
+        self.magnesium = round(self.ingredients.all().aggregate(magnesium__sum=Coalesce(Sum(F('magnesium')*F('portion_size')),0))['magnesium__sum'],9)
+        self.phosphorus = round(self.ingredients.all().aggregate(phosphorus__sum=Coalesce(Sum(F('phosphorus')*F('portion_size')),0))['phosphorus__sum'],9)
+        self.iron = round(self.ingredients.all().aggregate(iron__sum=Coalesce(Sum(F('iron')*F('portion_size')),0))['iron__sum'],9)
+        self.zinc = round(self.ingredients.all().aggregate(zinc__sum=Coalesce(Sum(F('zinc')*F('portion_size')),0))['zinc__sum'],9)
+        self.copper = round(self.ingredients.all().aggregate(copper__sum=Coalesce(Sum(F('copper')*F('portion_size')),0))['copper__sum'],9)
+        self.manganese = round(self.ingredients.all().aggregate(manganese__sum=Coalesce(Sum(F('manganese')*F('portion_size')),0))['manganese__sum'],9)
+        self.fluoride = round(self.ingredients.all().aggregate(fluoride__sum=Coalesce(Sum(F('fluoride')*F('portion_size')),0))['fluoride__sum'],9)
+        self.iodide = round(self.ingredients.all().aggregate(iodide__sum=Coalesce(Sum(F('iodide')*F('portion_size')),0))['iodide__sum'],9)
+        self.save()
+
+    def get_ingredients(self):
+        return json.loads(self.ingredients_list)
+
+    def can_add2(self,meal_nutrients,limits):
+        """
+        returns 2d-list how much meal nutrients differ from limit borders 
+        neg. number if nutrient too little
+        pos. number if nutrient too much
+        """
+        print('*********************')
+        print('can add2: START')
+        #print('meal kcals til now: ' + str(meal_nutrients['energy_kcal']))
+        #print('meal protein til now: ' + str(meal_nutrients['protein']))
+        
+        nutrients = {'carbs':0.0,'fat':0.0,'protein':0.0,
+        'vitamin_a':0.0,'vitamin_b1':0.0,'vitamin_b2':0.0,'vitamin_b2':0.0,'vitamin_b3':0.0,
+        'vitamin_b5':0.0,'vitamin_b6':0.0,'vitamin_b7':0.0,'vitamin_b9':0.0,
+        'vitamin_c':0.0,'vitamin_e':0.0,'vitamin_k':0.0,'sodium':0.0,'potassium':0.0,'calcium':0.0,
+        'magnesium':0.0,'phosphorus':0.0,'iron':0.0,'zinc':0.0,'copper':0.0,'manganese':0.0,'fluoride':0.0,'iodide':0.0}
+        differs = [0]*int(len(nutrients))
+        for n in nutrients:
+            #i = nutrients.index(n)
+            #print(n)
+            #print(meal_nutrients[n])
+            #print(limits[n])
+            if meal_nutrients[n] > limits[n][1]:
+                differs = meal_nutrients[n]-limits[n][1]
+                nutrients[n] = round(differs,9)
+            if meal_nutrients[n] < limits[n][0]:
+                differs= meal_nutrients[n]-limits[n][0]
+                nutrients[n] = round(differs,9)
+        print('can add2 END')
+        print('*********************')
+        #differences = [nutrients, differs]
+        return nutrients
+
+
+    def check_for_fruits(self):
+        '''
+        daily check if enough fruits in meal
+        '''
+        fruits = self.ingredients.all().filter(key__startswith='F')
+        if fruits.aggregate(Sum('portion_size'))['portion_size__sum'] == 2.0:
+            print('enough fruits')
+            return True
+        print('add some more fruits')
+        return False
+
+    def check_for_veggies(self):
+        '''
+        daily check if enough veggies in meal
+        '''
+        fruits = self.ingredients.all().filter(key__startswith='G')
+        if fruits.aggregate(Sum('portion_size'))['portion_size__sum'] == 4.0:
+            print('enough veggies')
+            return True
+        print('add some more veggies')
+        return False        
+
+
+class IngredientManager(models.Manager):
+
+    def get_lactose_free(self):
+        return self.exclude(lactose__gt=0)
+
+    def get_fructose_free(self):
+        return self.exclude(frucose__gt=0)
+
+    def get_vegan(self):
+        return self.filter(suitable_for='v')
+
+    def get_veggie(self):
+        return self.filter(suitable_for__startswith='v')
+
+    def exclude_drinks(self):
+        return self.exclude(key__regex=r'[NP]')
+
+    def exclude_seasoning(self):
+        return self.exclude(key__startswith=r'R')
+
+    def exclude_flour_raw_stuff(self):
+        return self.exclude(Q(key__startswith=r'C') & Q(name__regex=r'roh|(m|M)ehl'))
+
+    def only_eatable_foods(self):
+        qs = self.exclude_drinks()
+        qs = qs.exclude_seasoning()
+        qs = qs.exclude_flour_raw_suff()
+        return qs
+
+
+class Ingredients(models.Model):
+    key = models.CharField('key', null=True, blank=True,max_length=200, default='B100000')
+    name = models.CharField('name', null=True, blank=True,max_length=200, default='Tomato')
+    suitable_for = models.CharField('suitable for', null=True, blank=True, max_length=20, default='vegetarian',
+                                    choices=(('o', 'omnivore'), ('veggie', 'vegetarian'), ('v', 'vegan')))
+    contains = models.CharField('contains', max_length=20, null=True, blank=True)
+    suitable_for_religion = models.CharField('suitable_for_religion for', null=True, blank=True, max_length=20,
+                                    choices=(('k','kosher'),('m','muslim'),('h','hindu'),('km','kosher muslim'),
+                                        ('kh','koscher hindu'),('mh','muslim hindu'),('kmh','koscher muslim hindu')))
+
+    energy_kcal = models.FloatField('energy (kcal)', null=True, blank=True)
+    energy_kj = models.FloatField('energy (kJ)', null=True, blank=True)
+    carbs = models.FloatField('carbohydrates', null=True, blank=True)
+    fat = models.FloatField('fat', null=True, blank=True)
+    protein = models.FloatField('protein', null=True, blank=True)
+    fibre = models.FloatField('fibre', null=True, blank=True)
+    sugar_total= models.FloatField('sugar total', null=True, blank=True)
+    sum_of_saturated_fatty_acids = models.FloatField('sum of saturated fatty acids', null=True, blank=True)
+    sum_of_monounsaturated_fatty_acids = models.FloatField('sum of monounsaturated fatty acids', null=True, blank=True)
+    sum_of_polyunsaturated_fatty_acids = models.FloatField('sum of polyunsaturated fatty acids', null=True, blank=True)
+    lactose = models.FloatField('lactose(mg)', null=True, blank=True)
+    fructose = models.FloatField('fructose(mg)', null=True, blank=True)
+
+    # vitamins
+    vitamin_a = models.FloatField('vitamin A(µg)', null=True, blank=True)
+    vitamin_b1 = models.FloatField('vitamin B1(µg)', null=True, blank=True)
+    vitamin_b2 = models.FloatField('vitamin B2(µg)', null=True, blank=True)
+    vitamin_b3 = models.FloatField('vitamin B3(µg)', null=True, blank=True)
+    vitamin_b5 = models.FloatField('vitamin B5(µg)', null=True, blank=True)
+    vitamin_b6 = models.FloatField('vitamin B6 µg)', null=True, blank=True)
+    vitamin_b7 = models.FloatField('vitamin B7(µg)', null=True, blank=True)
+    vitamin_b9 = models.FloatField('vitamin B9(µg)', null=True, blank=True)
+    vitamin_b12 = models.FloatField('vitamin B12(µg)', null=True, blank=True)
+    vitamin_c = models.FloatField('vitamin C(µg)', null=True, blank=True)
+    vitamin_d = models.FloatField('vitamin D(µg)', null=True, blank=True)
+    vitamin_e = models.FloatField('vitamin E(µg)', null=True, blank=True)
+    vitamin_k = models.FloatField('vitamin K(µg)', null=True, blank=True)
+
+    # minerals
+    sodium = models.FloatField('sodium(mg)', null=True, blank=True)
+    potassium = models.FloatField('potassium(mg)', null=True, blank=True)
+    calcium = models.FloatField('calcium(mg)', null=True, blank=True)
+    magnesium = models.FloatField('magnesium(mg)', null=True, blank=True)
+    # not that necessary
+    phosphorus = models.FloatField('phosphorus(mg)', null=True, blank=True)
+    sulphur = models.FloatField('sulphor(mg)', null=True, blank=True)
+    chloride = models.FloatField('chloride(mg)', null=True, blank=True)
+
+    # trace elements
+    iron = models.FloatField('iron(µg)', null=True, blank=True)
+    zinc = models.FloatField('zinc(µg)', null=True, blank=True)
+    copper = models.FloatField('copper(µg)', null=True, blank=True)
+    manganese = models.FloatField('mangnese(µg)', null=True, blank=True)
+    fluoride = models.FloatField('fluoride(µg)', null=True, blank=True)
+    iodide = models.FloatField('iodide(µg)', null=True, blank=True)
+
+    objects = IngredientManager()
+
+    meal_group = models.CharField('meal group', null=True, blank=True, max_length=20)
+
+    type = models.ManyToManyField('MealType', related_name='mealtype')
+
+    portion_size = models.FloatField('portion size', null=True, blank=True, max_length=20, default=1)
+
+    status = models.CharField('status',max_length=20, default='relevant')
+
+    old_portion_size = models.FloatField('portion size', null=True, blank=True, max_length=20, default=0)
+
+    new_portion_size = models.FloatField('portion size', null=True, blank=True, max_length=20, default=0)
+
+
+    def __str__(self):
+        return self.name
+
+    def get_value_by_key(self,key):
+        if key == 'energy_kcal':
+            return self.energy_kcal
+        if key == 'carbs':
+            return self.carbs 
+        if key == 'fat':
+            return self.fat 
+        if key == 'protein':
+            return self.protein
+
+        if key == 'vitamin_a':
+            return self.vitamin_a
+
+        if key == 'vitamin_b1':
+            return self.vitamin_b1
+
+        if key == 'vitamin_b2':
+            return self.vitamin_b2 
+
+        if key == 'vitamin_b3':
+            return self.vitamin_b3
+
+        if key == 'vitamin_b5':
+            return self.vitamin_b5
+
+        if key == 'vitamin_b6':
+            return self.vitamin_b6
+
+        if key == 'vitamin_b7':
+            return self.vitamin_b7
+
+        if key == 'vitamin_b9':
+            return self.vitamin_b9
+
+        if key == 'vitamin_b12':
+            return self.vitamin_b12
+
+        if key == 'vitamin_c':
+            return self.vitamin_c
+        if key == 'vitamin_d':
+            return self.vitamin_d
+
+        if key == 'vitamin_e':
+            return self.vitamin_e
+
+        if key == 'vitamin_k':
+            return self.vitamin_k
+
+
+        if key == 'sodium':
+            return self.sodium 
+        if key == 'calcium':
+            return self.calcium
+        if key == 'potassium':
+            return self.potassium 
+        if key == 'magnesium':
+            return self.magnesium
+        if key == 'phosphorus':
+            return self.phosphorus
+
+        if key == 'iron':
+            return self.iron 
+        if key == 'zinc':
+            return self.zinc
+        if key == 'copper':
+            return self.copper 
+        if key == 'manganese':
+            return self.manganese
+        if key == 'fluoride':
+            return self.fluoride 
+        if key == 'iodide':
+            return self.iodide  
+
+
+    
+    

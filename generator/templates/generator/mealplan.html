@@ -1,0 +1,330 @@
+{% extends 'generator/index.html' %}
+{% load i18n static staticfiles tags %}
+
+{% block main_content %}
+    <div class="popupWrapper">
+    </div>
+    <header><h1>{{ person.name }}, hier der Ernährungsplan*!</h1></header>
+
+    <div id="personsdata">
+        <p>BMI liegt bei: {{ person.get_bmi|floatformat:"-2" }}</p>
+        <p>Energiebedarf liegt bei: {{ person.get_bmr|floatformat:"-2" }}kcal</p>
+        <p>PAL liegt zwischen: {{ person.get_pal_min|floatformat:"-1" }} - {{ person.get_pal_max|floatformat:"-1" }}</p>
+        <p>Gesamtenergiebedarf liegt bei: {{ person.get_full_energyneed.0|floatformat:"-2" }} - {{ person.get_full_energyneed.1|floatformat:"-2" }}kcal</p>
+        <p>Gesamtenergiebedarf (bzgl. Ziel "{{ person.get_goal }}"): {{ energy_goal.0|floatformat:"-2" }} - {{ energy_goal.1|floatformat:"-2" }}kcal{% if person.goal == 'l' %} (also ein Defizit von: {{ person.get_full_energyneed.0|sub:energy_goal.0 }}kcal){% elif person.goal == 'g' %}(also ein Überschuss von: {{ energy_goal.0|sub:person.get_full_energyneed.0 }}kcal){% endif %}</p>
+    </div>
+    <div id="fooddata">
+        <p>Ernährungsweise: {{ person.get_nutrition_habit_display }}, allergisch gegen: {% if person.allergies != 'k' %}{{ person.get_allergies_display }}{% else %}Nichts{% endif %}</p>
+        <p>Abneigungen: {% if person.dislikes %}{{ person.dislikes }}{% else %}Keine{% endif %}</p>
+        <p>Vorlieben: {% if person.preferences %}{{ person.preferences }}{% else %}Keine{% endif %}</p>
+    </div>
+    <p class="planinfo">
+        *Dieser Ernährungsplan bezieht nur feste Lebensmittel mit ein. Das bedeutet, Getränke können beliebig (natürlich in Maßen) verzehrt werden und die Gerichte können nach Belieben gewürzt und verfeinert werden. Dieser Plan soll lediglich als Empfehlung dienen, sodass die Lebensmittel zwischen den einzelnen Mahlzeiten vertauscht werden dürfen. Ebenso zielt der Plan stets nur die Untergrenzen der Makronährstoffe an, sodass ein Puffer an aufzunehmenden Kalorien besteht.<br>
+        Beim Zubereiten verlieren viele Lebensmittel Nährstoffe. Desweiteren nimmt der Körper nur so viel an Nährstoffen auf wie er auch verarbeiten kann. Überschüssiges wird ausgeschieden.
+    </p>
+    <table class="colorinfo">
+        <caption>Farb- & Symbolhinweise zu den Nährstoffen:</caption>
+        <thead>
+            <tr><td>Farbe</td><td>Bedeutung</td></tr>
+        </thead>
+        <tbody>
+            <tr><td class="darkgreen">Dunkelgrün</td><td>Überschreitung von min. 40%</td></tr>
+            <tr><td class="green">Grün</td><td>Überschreitung von min. 16%</td></tr>
+            <tr><td class="lightgreen">Hellgrün</td><td>Überschreitung von min. 0,01%</td></tr>
+            <tr><td class="check">Haken <i class="fa fa-check"></i></td><td>Genau im Intervall</td></tr>
+            <tr><td class="yellow">Gelb</td><td>Unterschreitung von min. 0,01%</td></tr>
+            <tr><td class="orange">Orange</td><td>Unterschreitung von min. 16%</td></tr>
+            <tr><td class="red">Rot</td><td>Unterschreitung von min. 40%</td></tr>
+        </tbody>
+    </table>
+    <div id="container" style="width:1500px;margin: 0 auto"></div>
+    <div id="container2" style="width:1500px;margin: 0 auto"></div>
+    <div id="rating_button_container">
+        <!--a id="rating_button" href="https://www.survio.com/survey/d/M9F7J9W5L9F8U1F4Q" target="_blank">Bewerte deinen Ernährungsplan!</a-->
+        <div id="explain_button">Zeig mir, wie man den Kalendar benutzt</div>
+    </div>
+
+     <div class="video hidden"><video width="800" controls>
+        <source src="{% static 'generator/explain.mp4' %}" type="video/mp4">
+        <source src="{% static 'generator/foodrec.webm' %}" type="video/webm">
+        Der Browser unterstützt das video-tag nicht.
+    </video></div>
+    <div class="hidden_inputs">
+        {% if generatorform.errors %}{{ generatorform.non_field_errors }}{% endif %}
+        <form id="generatorform" action="{% url 'mealplan' person.id %}" method="post" class="hidden">
+            {% csrf_token %}
+
+            <label for="{{ generatorform.hidden_start.id_for_label }}">{{ generatorform.hidden_start.label }}</label>{{ generatorform.hidden_start }}
+            <label for="{{ generatorform.hidden_end.id_for_label }}">{{ generatorform.hidden_end.label }}</label>{{ generatorform.hidden_end }}
+            {{ generatorform.person_id }}
+            <input type="submit" value="Abschicken">
+        </form>
+    </div>
+    <i id="changeview_info" class="fa fa-info-circle" title="Kalendaransicht wechseln"></i>
+    <i id="pdf_info" class="fa fa-info-circle" title="Ernährungsplan für die aktuelle Woche als PDF erstellen"></i>
+    <i id="generate_info" class="fa fa-info-circle" title="Für weitere Tage Ernährungspläne erstellen"></i>
+    <i id="usage_info" class="fa fa-info-circle"
+       title="Einzelne Mahlzeiten, ganze Tage und mehrere Tage sind klickbar/auswählbar für detaillierte Informationen"></i>
+    <div id="calendar">
+
+    </div>
+{% endblock main_content %}
+
+{% block scripts %}
+<script type="text/javascript">
+
+    function startOfWeek(date){
+        var diff = date.getDate() - date.getDay() + (date.getDay() === 0 ? -6 : 1);
+
+        return new Date(date.setDate(diff));
+
+    }
+    $(document).ready(function () {
+
+        if($('#generatorform').hasClass('hidden')){
+            $('#generatorform input').attr('disabled','disabled')
+        }
+        $('#explain_button').click(function(){
+            //$('.video').toggleClass('hidden', duration=1000)
+            $('.video').slideToggle('slow')
+        });
+
+        var info_1 = $('#changeview_info');
+        var info_2 = $('#pdf_info');
+        var info_3 = $('#generate_info');
+        var info_4 = $('#usage_info');
+        var person_id = '{{ person.id }}';
+        var isDown = false;
+        var msdwnEvent = null;
+        $('#id_person_id').val(person_id);
+        var myDayClickSelect = function (ev) {
+            if (isDown) {
+                //do something
+                isDown = false;
+                if ($(ev.target).is('.fc-day-header.fc-widget-header') &&
+                    $(msdwnEvent.target).attr('data-date') !== $(ev.target).attr('data-date')) {
+                    calendar.selectDayGrid($(msdwnEvent.target).attr('data-date'),
+                        endDate = $(ev.target).attr('data-date'), just_trigger_click = false,
+                        pev = ev);
+                } else {
+                    calendar.selectDayGrid($(msdwnEvent.target).attr('data-date'), endDate = null,
+                        just_trigger_click = true, pev = msdwnEvent)
+                }
+
+            }
+        };
+        var myMouseDown = function (ev) {
+            var index = $(ev.target).index();
+            isDown = true;
+            msdwnEvent = ev;
+        };
+
+        var calendarEl = document.getElementById('calendar');
+
+        var calendar = new FullCalendar.Calendar(calendarEl, {
+            minTime: '06:00:00',
+            locale: 'de',
+            timeZone: 'Europe/Berlin',
+            plugins: ['interaction', 'dayGrid', 'timeGrid'],
+            defaultView: 'dayGridWeek',
+            selectable: true,
+            selectMinDistance: 20,
+            fixedWeekCount: false,
+            customButtons: {
+                generator: {
+                    text: 'Generieren von ... bis ...',
+                    click: function (e) {
+                        $.when($('#generatorform').toggleClass('hidden', duration=1000)).then(function () {
+                            if($('#generatorform').hasClass('hidden')){
+                                $('#generatorform input').attr('disabled','true')
+                            }
+                            else{
+                                $('#generatorform input').removeAttr('disabled')
+                            }
+                        });
+                    }
+                },
+                toPDF: {
+                    text: 'PDF für Woche',
+                    click: function (e) {
+                        var curr = calendar.getDate(); // get current date
+                        var start = startOfWeek(curr);
+                        var end = new Date(curr.setDate(start.getDate() + 6));
+                        start = start.toISOString().split('T')[0];
+                        end = end.toISOString().split('T')[0];
+                        window.open('/pdf/?person_id=' + person_id + '&start=' + start + '&end=' + end, '_blank')
+                    }
+                }
+            },
+            header: {
+                left: 'prev,next today dayGridMonth, dayGridWeek ,dayGridDay',
+                center: 'title ',
+                right: 'toPDF generator'
+            },
+
+            eventRender: function (info) {
+                // remove description for meals
+                if (info.view.type === 'dayGridMonth') {
+                    $(info.el).find('.fc-description').remove();
+                }
+            },
+            datesRender: function (info) {
+                if (info.view.type === 'dayGridWeek' || info.view.type === 'dayGridDay') {
+                    calendar.on('eventRender', function (info) {
+                        if ($(info.el).find('.fc-description').length > 0) {
+                            $(info.el).find('.fc-description').replaceWith(info.event.extendedProps.description)
+                        } else {
+                            $(info.el).find('.fc-content').append(info.event.extendedProps.description);
+                        }
+                    });
+                    calendar.rerenderEvents();
+                    if (info.view.type === 'dayGridWeek') {
+                        $('.fc-day-header').click(function (e) {
+                            calendar.selectDayGrid($(e.target).attr('data-date'), endDate=null, just_trigger_click=true,
+                                pev=e);
+                            $('.fc-highlight-skeleton').hide();
+                        });
+                        $(function () {
+                            $('.fc-day-header.fc-widget-header').parent('tr').selectable({
+                                filter: 'th',
+                                distance: 20,
+                                create: function (event, ui) {
+                                    $('.fc-event-container').addClass('ui-selectee')
+                                },
+                                stop: function (event, ui) {
+                                    calendar.selectDayGrid($('.fc-day-header.ui-selected').first().attr('data-date'),
+                                        endDate = $('.fc-day-header.ui-selected').last().attr('data-date'), just_trigger_click = false,
+                                        pev = event);
+                                }
+                            });
+                        });
+                    }
+                    if (info.view.type === 'dayGridDay') {
+                        $('.fc-day-header').click(function (e) {
+                            calendar.selectDayGrid($(e.target).attr('data-date'), endDate=null, just_trigger_click=true,
+                                pev=e);
+                            $('.fc-highlight-skeleton').hide();
+                        });
+                    }
+                } else { // monthView
+                    calendar.rerenderEvents();
+                    // always unbind when switching to month view
+                    //$(calendarEl).off('mousedown', '.fc-day-header.fc-widget-header', myMouseDown);
+                }
+            },
+
+            eventClick: function (info) {
+                $.get('/schedule/occurrence/' + info.event.extendedProps.event_id + '/' + info.event.id
+                    + '/?person_id=' + person_id, function (data) {
+                    $('.popupWrapper').html(data);
+                    $('.popupWrapper').css({position: 'absolute', top: '800px', display:'flex'});
+                });
+            },
+
+            dateClick: function (info) {
+                var startDate = info.date;
+                var year = startDate.getFullYear();
+                var month = startDate.getMonth() + 1;
+                var day = startDate.getDate();
+                $.get('/schedule/calendar/daily/nutrition/?year=' + year + '&month=' + month + '&day=' + day
+                    + '&person_id=' + person_id, function (data) {
+                    $('.popupWrapper').html(data);
+                    var max = $('.close').css('max-width');
+                    $('.popupWrapper').css({position: 'absolute', top: '800px', display: 'flex'});
+                    $('.popupWrapper').css('max-width', max);
+                });
+            },
+
+            select: function (info) {
+                var startDate = info.start;
+                var year = startDate.getFullYear();
+                var month = startDate.getMonth() + 1;
+                var day = startDate.getDate();
+                var end = '';
+                if (info.end != null) {
+                    var endDate = info.end;
+                    var year_end = endDate.getFullYear();
+                    var month_end = endDate.getMonth() + 1;
+                    var day_end = endDate.getDate() - 1; // because it is all day selection
+                    if(day_end === 0){
+                        month_end = month_end-1;
+                        endDate = new Date(year_end,month_end,0);
+                        day_end = endDate.getDate();
+                    }
+                    end = '&year_end=' + year_end + '&month_end=' + month_end + '&day_end=' + day_end;
+                }
+
+                var start = '/?year=' + year + '&month=' + month + '&day=' + day;
+
+                $.get('/schedule/calendar/daily/' + '{{ person.calendar.slug }}' + start + end + '&person_id=' + person_id, function (data) {
+                    $('.popupWrapper').html(data);
+                    var max = $('.close').css('max-width');
+                    $('.popupWrapper').css({position: 'absolute', top: '800px', display: 'flex'});
+                    $('.popupWrapper').css('max-width', max);
+                });
+            },
+            events: '/schedule/api/occurrences/?calendar_slug=' + '{{ person.calendar.slug }}',
+        });
+
+        calendar.render();
+        $('.fc-toPDF-button').append($(info_2));
+        $('.fc-generator-button').append($(info_3));
+        $('.fc-left').append($(info_1));
+        $('.fc-left').append($(info_4));
+        $('.fa-info-circle').tooltip({
+            classes: {
+                "ui-tooltip": " "
+            }
+        });
+
+        /*var stats_area = $('#container');
+        var formatter = function () {
+            if (this.y > 0)
+                return this.y + ' ' + this.series.name;
+            if (this.y < 0)
+                return this.y + ' ' + this.series.name;
+        };
+        stats_area.html('');
+        $.ajax(
+            {
+                url: "/mealplan/stats?kv_key=stats_values_list_now_6",
+                type: "GET",
+                dataType: 'json',
+                success: function (result) {
+                    console.log(result)
+                    result.forEach(function (element, index, array) {
+                        element.plotOptions.series.dataLabels.formatter = formatter;
+                        console.log(element.plotOptions)
+                        Highcharts.chart('container', element)
+                    });
+                },
+                error: function (e) {
+                    console.log(e);
+                }
+            });
+        var stats_area2 = $('#container2');
+        stats_area2.html('');
+        $.ajax(
+            {
+                url: "/mealplan/stats?kv_key=stats_counted_now_6",
+                type: "GET",
+                dataType: 'json',
+                success: function (result) {
+                    console.log(result)
+                    result.forEach(function (element, index, array) {
+                        element.plotOptions.series.dataLabels.formatter = formatter;
+                        console.log(element.plotOptions)
+                        Highcharts.chart('container2', element)
+                    });
+                },
+                error: function (e) {
+                    console.log(e);
+                }
+            });
+        $('.fa-times').click(function () {
+            $(this).parent('.popupWrapper').hide();
+        });*/
+
+    });
+</script>
+{% endblock scripts %}

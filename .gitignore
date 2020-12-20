@@ -127,3 +127,7 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+/staticfiles/
+/db_tu_server.json
+
+.idea

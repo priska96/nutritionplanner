@@ -1,0 +1,61 @@
+LIMITS_MALE = {
+        'fibre': (30, 30), #gram
+        'sugar_total': (20,25), #gram
+        'vitamin_a': (1, 1), #mg
+        'vitamin_b1': (1.2, 1.3), #mg
+        'vitamin_b2': (1.3,1.4), #mg
+        'vitamin_b3': (15, 16), #mg
+        'vitamin_b5': (6, 6), #mg
+        'vitamin_b6': (1.5, 1.6), #mg
+        'vitamin_b7': (30,60), #mug
+        'vitamin_b9': (300, 300), #mug
+        'vitamin_b12': (3, 3), #mug
+        'vitamin_c': (110, 110), #mg
+        'vitamin_d': (20, 20), #mg
+        'vitamin_e': (13,15), #mg
+        'vitamin_k': (70, 70), #mug
+        'sodium': (1500, 1500), #mg Natrium
+        'potassium': (4000, 4000), #mg Kalium
+        'calcium': (1000, 1200), #mg Calzium
+        'magnesium': (350, 400), #mg
+        'phosphorus': (700, 1250), #mg
+        #'sulphur': 
+        #'chloride': 
+        'iron': (10, 12), #mg
+        'zinc' : (10, 10), #mg
+        'copper':(1, 1.5), #mg
+        'manganese': (2, 5), #mg
+        'fluoride': (3.2, 3.8), #mg
+        'iodide': (180, 200) #mug
+}
+
+LIMITS_FEMALE = {
+        'fibre': (30000, 30000), #gram -> mg
+        'sugar_total': (20000,25000), #gram -> mg
+        'vitamin_a': (800, 800), #mg -> mug
+        'vitamin_b1': (1000, 1000), #mg -> mug
+        'vitamin_b2': (1000,1100), #mg -> mug
+        'vitamin_b3': (13000, 14000), #mg -> mug
+        'vitamin_b5': (6000, 6000), #mg -> mug
+        'vitamin_b6': (1200, 1200), #mg -> mug
+        'vitamin_b7': (30,60), #mug
+        'vitamin_b9': (300, 300), #mug
+        'vitamin_b12': (3, 3), #mug
+        'vitamin_c': (95000, 95000), #mg -> mug
+        'vitamin_d': (20000, 20000), #mg -> mug
+        'vitamin_e': (13000,15000), #mg -> mug
+        'vitamin_k': (60, 60), #mug
+        'sodium': (1500, 1500), #mg Natrium
+        'potassium': (4000, 4000), #mg Kalium
+        'calcium': (1000, 1200), #mg Calzium
+        'magnesium': (300, 350), #mg
+        'phosphorus': (700, 1250), #mg
+        #'sulphur': 
+        #'chloride': 
+        'iron': (10000, 15000), #mg -> mug
+        'zinc' : (7000, 7000), #mg -> mug
+        'copper':(1000, 1500), #mg -> mug
+        'manganese': (2000, 5000), #mg
+        'fluoride': (2900, 3100), #mg
+        'iodide': (180, 200) #mug
+}

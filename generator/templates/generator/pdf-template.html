@@ -1,0 +1,184 @@
+{% load static tags %}
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <title>Ernährungsplan</title>
+    <meta charset="UTF-8">
+
+    <style type="text/css">
+        @page {
+            size: a4 portrait;
+            margin: 15mm !important;
+            padding: 0 !important;
+        }
+        body {
+            font-weight: 200;
+            font-size: 9px;
+            display: block;
+            height: 297mm;
+            width: 210mm;
+            margin: 0;
+            padding: 0;
+        }
+        h1 {
+            font-size: 11px;
+        }
+        img {
+            width: 35mm;
+            margin: 0 75mm 2mm;
+        }
+        .container {
+            display: flex;
+            flex-direction: row;
+            flex-wrap: wrap;
+            justify-content: space-between;
+            height: 297mm;
+            max-width: 180mm;
+        }
+        .container1 {
+            height: 229mm;
+            display: flex;
+            flex-direction: row;
+            flex-wrap: wrap;
+            justify-content: space-between;
+            max-width: 180mm;
+        }
+        .mealset_container {
+            width: 4.4cm;
+            display: flex;
+            flex-direction: column;
+            justify-content: stretch;
+            height: 267mm;
+        }
+        .seperator {
+            background-color: #d9d6c4;
+            width: 1px;
+            height: 267mm;
+        }
+        .mealset_container1 {
+            width: 4.4cm;
+            display: flex;
+            flex-direction: column;
+            justify-content: stretch;
+            height: 267mm;
+        }
+        .seperator1 {
+            background-color: #d9d6c4;
+            width: 1px;
+            height: 267mm;
+        }
+
+        .seperator:after {
+            content: ' ';
+        }
+
+        .seperator.last {
+            background: none;
+            width: 0;
+        }
+
+        .seperator.last:after {
+            content: '';
+        }
+        .seperator1:after {
+            content: ' ';
+        }
+
+        .seperator1.last {
+            background: none;
+            width: 0;
+        }
+
+        .seperator1.last:after {
+            content: '';
+        }
+
+        .mealset_container h1, .mealset_container1 h1 {
+            width: 4.4cm;
+            margin: 0 0 2mm 0;
+        }
+
+        .mealset_container .meal_infos, .mealset_container1 .meal_infos {
+            font-weight: bold;
+        }
+        .mealset_container .ingredients_table, .mealset_container1 .ingredients_table {
+            width: 4.4cm;
+        }
+
+        .mealset_container .ingredients_table, .mealset_container .ingredients_table td, .mealset_container1 .ingredients_table, .mealset_container1 .ingredients_table td{
+            border: none;
+        }
+
+        .mealset_container .ingredients_table td.portion_size, .mealset_container1 .ingredients_table td.portion_size  {
+            border-left: 1px solid #d9d6c4;
+            width: 7mm;
+            text-align: right;
+        }
+        .nutrients_container {
+            margin-left: 2mm;
+            width: 4.2cm;
+            position: relative;
+        }
+
+        .nutrients_container span{
+            display: block;
+        }
+        .heading, .heading_v, .heading_m {
+            font-weight: bold;
+        }
+        .fa.fa-chevron-down {
+            display: none;
+        }
+        .inner_v, .inner_m{
+            display: inline-block;
+        }
+
+
+        
+    </style>
+</head>
+<body>
+    <!--img src="http://{{ request.get_host }}{% static 'generator/tu__ernaehrungsplaner_logo.png' %}" alt="TUB_Foodrecommender_LOGO"-->
+    <div class="container1">
+    {% for mealset in mealsets_half1 %}
+        <div class="mealset_container1">
+            <h1>{{ mealset.date|date:'D., d.b' }}</h1>
+            <div>
+                {% for meal in mealset.meals.all %}
+                    <span class="meal_infos">{{ meal.mealtype.name }}, {{ meal.mealtype.starttime|date:'H' }} - {{ meal.mealtype.endtime|date:'H' }} Uhr</span>
+                    {% get_ingredients_infos meal %}
+                {% endfor %}
+            </div>
+        </div>
+        <div class="seperator1{% if forloop.last %} last{% endif %}"></div>
+    {% empty %}
+        <p>
+            <span>Für diese Tage wurden noch keine Gerichte erstellt.</span>
+        </p>
+    {% endfor %}
+    </div>
+    <div class="container">
+    {% for mealset in mealsets_half2 %}
+        <div class="mealset_container">
+            <h1>{{ mealset.date|date:'D., d.b' }}</h1>
+            <div>
+                {% for meal in mealset.meals.all %}
+                    <span class="meal_infos">{{ meal.mealtype.name }}, {{ meal.mealtype.starttime|date:'H' }} - {{ meal.mealtype.endtime|date:'H' }} Uhr</span>
+                    {% get_ingredients_infos meal %}
+                {% endfor %}
+            </div>
+        </div>
+        <div class="seperator"></div>
+    {% empty %}
+        <p>
+            <span>Für diese Tage wurden noch keine Gerichte erstellt.</span>
+        </p>
+    {% endfor %}
+    {% if mealsets %}
+    <div class="nutrients_container">
+        {% get_nutrients_infos_mealsets mealsets percent_wanted=False %}
+    </div>
+{% endif %}
+    </div>
+</body>
+</html>

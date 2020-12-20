@@ -1,0 +1,16 @@
+<table {% if fcdescription %}class="fc-description"{% else %}class="ingredients_table"{% endif %}>
+    <!--thead>
+    <tr>
+        <td>Zutaten</td>
+        <td class="portion_size">Portionsgröße</td>
+    </tr>
+    </thead-->
+    <tbody>
+    {% for ingred in ingredients %}
+        <tr {% if fcdescription %}class="dotted_line{% if forloop.last %} last{% endif %}"{% endif %}>
+            <td>{{ ingred.0 }}</td>
+            <td class="portion_size">{{ ingred.1|floatformat:"-2" }} g</td>
+        </tr>
+    {% endfor %}
+    </tbody>
+</table>

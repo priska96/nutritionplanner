@@ -1,0 +1,574 @@
+from django.db import models
+from django.db.models import Q, Sum
+from django.db.models.functions import Coalesce
+from schedule.models import Event
+from random import randint
+
+# Create your models here.
+def frange(start, stop=None, step=None):
+    #Use float number in range() function
+    # if stop and step argument is null set start=0.0 and step = 1.0
+    if stop == None:
+        stop = start + 0.0
+        start = 0.0
+    if step == None:
+        step = 1.0
+    while True:
+        if step > 0 and start >= stop:
+            break
+        elif step < 0 and start <= stop:
+            break
+        yield ("%g" % start) # return float number
+        start = start + step
+
+
+class Person(models.Model):
+    name = models.CharField('name', max_length=20, blank=True, null=True, default='Priska')
+    gender = models.CharField('gender', max_length=7, choices=(('m', 'male'), ('f', 'female')))
+    age = models.IntegerField('age')
+    weight = models.FloatField('weight in kg')
+    height = models.FloatField('height in m')
+    nutrition_habit = models.CharField('nutrition habit', max_length=11, default='vegetarian',
+                                       choices=(('o', 'omnivore'), ('veggie', 'vegetarian'), ('v', 'vegan')))
+    allergies = models.CharField('allergies', max_length=11, null=True, blank=True,
+                                 choices=(('l', 'lactose'), ('n', 'nuts'), ('g', 'gluten'),
+                                          ('ln', 'lactose, nuts'),('lg', 'lactose, gluten'),
+                                          ('ng', 'nuts, gluten'),('lng', 'lactose, nuts, gluten')))
+    activity = models.CharField('activity', max_length=11, null=True, blank=True,
+                                choices=(('1', 'sitting or lying'), ('2', 'sitting and little freetime activities'),
+                                         ('3', 'sitting, walking and little freetime activites'),
+                                         ('4', 'mostly standing and walking'),
+                                         ('5', 'physically demanding work and much freetime acitivies')))
+    sports = models.BooleanField('sports or exhausting freetime', default=False)
+
+    goal = models.CharField('goal', max_length=11, null=True, blank=True,
+                            choices=(('l', 'loose weight'), ('g', 'gain weight'), ('k', 'keep weight'),
+                                     ('s', 'structured eating')))
+    def __str__(self):
+        return self.name
+
+    def get_bmi(self):
+        return self.weight/(self.height*self.height)
+
+    # basic metabolism rate
+    # benedict and harris formula, 1919
+    def get_bmr(self):
+        if self.gender == 'm':
+            return 66.473+13.752*self.weight+5.003*self.height*100-6.755*self.age
+        return 655.096+9.563*self.weight+1.850*self.height*100-4.676*self.age
+
+    # physical activity level
+    # work + freetime + sleep
+    def get_pal(self):
+        pal = 0
+        if self.activity == '1':
+            return 1.2
+        if self.activity == '2':
+            return 1.4
+        if self.activity == '3':
+            pal = 1.6
+        if self.activity == '4':
+            pal = 1.8
+        if self.activity == '5':
+            pal = 2.0
+        if self.sports:
+            pal += 0.3
+        return pal
+
+    def get_full_energyneed(self):
+        return self.get_bmr() * self.get_pal()
+
+    def get_full_energyneed_goal(self):
+        if self.goal == 'l':
+            return self.get_full_energyneed()-300
+        if self.goal == 'g':
+            return self.get_full_energyneed()+300
+        return self.get_full_energyneed()
+
+    def get_nutrient_limits(self):
+        energy = self.get_full_energyneed_goal()
+        dict= {}
+        dict['energy_kcal'] = (energy-150, energy)
+        dict['energy_kj'] = (energy * 4.184, energy * 4.184)
+        dict['carbs'] = (0.5*energy*0.24*1000, 0.5*energy*0.24*1000)
+        dict['fat'] = (0.3*energy*1000, 0.3*energy*1000)
+        dict['protein'] = ((0.8*self.weight-5)*1000, 0.8*self.weight*1000)
+        dict['fibre'] = (30000, 30000)
+        #dict['sugar_total'] =
+        #dict['sum_of_saturated_fatty_acids'] =
+        #dict['sum_of_monounsaturated_fatty_acids'] =
+        #dict['sum_of_polyunsaturated_fatty_acids'] =
+        dict['vitamin_a'] = (8000, 8000) if self.gender == 'f' else (1000, 1000)
+        dict['vitamin_b1'] = (1000, 1000) if self.gender == 'f' else (1200, 1300)
+        dict['vitamin_b2'] = (1000, 1100) if self.gender == 'f' else (1300, 1400)
+        dict['vitamin_b3'] = (11000, 13000) if self.gender == 'f' else (15000, 16000)
+        dict['vitamin_b5'] = (6000, 6000)
+        dict['vitamin_b6'] = (1200, 1200) if self.gender == 'f' else (1500, 1600)
+        dict['vitamin_b7'] = (30,60)
+        dict['vitamin_b9'] = (300, 300)
+        dict['vitamin_b12'] = (3000, 3000)
+        dict['vitamin_c'] = (800, 800) if self.gender == 'f' else (1000, 1000)
+        dict['vitamin_d'] = (20000, 20000)
+        dict['vitamin_e'] = (12000, 12000) if self.gender == 'f' else (13000,15000)
+        dict['vitamin_k'] = (60000, 60000) if self.gender == 'f' else (70000, 70000)
+        dict['sodium'] = (1500, 1500)
+        dict['potassium'] = (4000, 4000)
+        dict['calcium'] = (1000, 1200)
+        dict['magnesium'] = (300, 350) if self.gender == 'f' else (350, 400)
+        dict['phosphorus'] = (700, 1250)
+        #dict['sulphur'] =
+        #dict['chloride'] =
+        dict['iron'] = (10000, 15000) if self.gender == 'f' else (10000, 12000)
+        dict['zinc'] = (7000, 7000) if self.gender == 'f' else (10000, 10000)
+        dict['copper'] = (0, 15000)
+        dict['manganese'] = (2000, 5000)
+        dict['fluoride'] = (2900, 3100) if self.gender == 'f' else (3200, 3800)
+        dict['iodide'] = (180, 200)
+
+        return dict
+
+    def create_meal(self):
+        from random import randint, shuffle
+        limits = self.get_nutrient_limits()
+        print(limits)
+        meal = Meal(name='first Try', type='b')
+        meal.save()
+        ingredients = None
+        if self.nutrition_habit == 'v':
+            ingredients = Ingredients.objects.get_vegan()
+        elif self.nutrition_habit == 'veggie':
+            ingredients = Ingredients.objects.get_veggie()
+
+        #if 'l' in self.allergies:
+        #    ingredients = ingredients.get_lactose_free()
+        #if 'f' in self.allergies:
+        #    ingredients = ingredients.get_fructose_free()
+        #if 'n' in self.allergies:
+        #    ingredients = ingredients.exclude(contains='n')
+        ingredients = ingredients.filter(type__type='b')
+        ingredients_ids  = list(ingredients.values_list('id',flat=True))
+        print(type(ingredients_ids))
+        print(ingredients_ids)
+        shuffle(ingredients_ids)
+        print(ingredients_ids)
+        dfs(ingredients_ids[:50], ingredients_ids[0],meal=meal,limits=limits)
+        return meal.ingredients
+
+def dfs(ingredients_ids, ingred_id, meal=None, limits=None):
+    print('dfs')
+    print(ingredients_ids)    
+    ingredient = Ingredients.objects.get(id=ingred_id)
+    
+    meal.set_nutrients()
+    if ingredient.can_add(meal.get_nutrients(),limits):
+        print('found ' + ingredient.name + ' and added it')
+        meal.ingredients.add(ingredient)
+        meal.save()
+
+    print('ingredients til now:')
+    print(meal.ingredients.all())
+    print('nutrients til now:')
+    print(meal.get_nutrients())
+    print('\n')
+
+    if not is_in_limits(meal.get_nutrients(), limits):
+        print(meal.ingredients)
+        dfs(ingredients_ids, ingredients_ids[randint(0,len(ingredients_ids)-1)], meal, limits)
+    return meal.ingredients
+    
+
+def is_in_limits(nutrients, limits):
+    print(nutrients['energy_kcal'])
+    print(limits['energy_kcal'][0])
+    print(limits['energy_kcal'][1])
+    print(limits['protein'][0])
+    print(limits['protein'][1])
+    if nutrients is None:
+        return True
+    #if (float(nutrients['energy_kcal']) in frange(limits['energy_kcal'][0],limits['energy_kcal'][1])):#and \    
+    if (limits['energy_kcal'][0] <= nutrients['energy_kcal'] and nutrients['energy_kcal'] <= limits['energy_kcal'][1]) and \
+        (limits['protein'][0] <= nutrients['protein'] and nutrients['protein'] <=limits['protein'][1]):
+        #(limits['energy_kj'][0] <= nutrients['energy_kj'] and nutrients['energy_kj'] <= limits['energy_kj'][1]) and \
+        #(limits['carbs'][0]  <= nutrients['carbs'] and nutrients['carbs'] <= limits['carbs'][1]) and \
+        #(limits['fat'][0] <= nutrients['fat']and nutrients['fat'] <= limits['fat'][1]) and \
+        # and \
+            # (nutrients['fibre'] >= limits['fibre'][0] and nutrients['fibre'] <= limits['fibre'][1]) and \
+            # (nutrients['vitamin_a'] >= limits['vitamin_a'][0] and nutrients['vitamin_a'] <= limits['vitamin_a'][1]) and \
+            # (nutrients['vitamin_b1'] >= limits['vitamin_b1'][0] and nutrients['vitamin_b1'] <= limits['vitamin_b1'][1]) and \
+            # (nutrients['vitamin_b2'] >= limits['vitamin_b2'][0] and nutrients['vitamin_b2'] <= limits['vitamin_b2'][1]) and \
+            # (nutrients['vitamin_b3'] >= limits['vitamin_b3'][0] and nutrients['vitamin_b3'] <= limits['vitamin_b3'][1]) and \
+            # (nutrients['vitamin_b5'] >= limits['vitamin_b5'][0] and nutrients['vitamin_b5'] <= limits['vitamin_b5'][1]) and \
+            # (nutrients['vitamin_b6'] >= limits['vitamin_b6'][0] and nutrients['vitamin_b6'] <= limits['vitamin_b5'][1]) and \
+            # (nutrients['vitamin_b7']  >= limits['vitamin_b7'][0] and nutrients['vitamin_b7'] <= limits['vitamin_b7'][1]) and \
+            # (nutrients['vitamin_b9']  >= limits['vitamin_b9'][0] and nutrients['vitamin_b9'] <= limits['vitamin_b9'][1]) and \
+            # (nutrients['vitamin_b12'] >= limits['vitamin_b12'][0] and nutrients['vitamin_b12'] <= limits['vitamin_b12'][1]) and \
+            # (nutrients['vitamin_c'] >= limits['vitamin_c'][0] and nutrients['vitamin_c'] <= limits['vitamin_c'][1]) and \
+            # (nutrients['vitamin_d'] >= limits['vitamin_d'][0] and nutrients['vitamin_d'] <= limits['vitamin_d'][1]) and \
+            # (nutrients['vitamin_e'] >= limits['vitamin_e'][0] and nutrients['vitamin_e'] <= limits['vitamin_e'][1]) and \
+            # (nutrients['vitamin_k'] >= limits['vitamin_k'][0] and nutrients['vitamin_k']  <= limits['vitamin_k'][1]) and \
+            # (nutrients['sodium'] >= limits['sodium'][0] and nutrients['sodium'] <= limits['sodium'][1]) and \
+            # (nutrients['potassium'] >= limits['potassium'][0] and nutrients['potassium'] <= limits['potassium'][1]) and \
+            # (nutrients['calcium'] >= limits['calcium'][0] and nutrients['calcium'] <= limits['calcium'][1]) and \
+            # (nutrients['magnesium'] >= limits['magnesium'][0] and nutrients['magnesium'] <= limits['magnesium'][1]) and \
+            # (nutrients['phosphorus'] >= limits['phosphorus'][0] and nutrients['phosphorus'] <= limits['phosphorus'][1]) and \
+            # (nutrients['iron'] >= limits['iron'][0] and nutrients['iron'] <= limits['iron'][1]) and \
+            # (nutrients['zinc'] >= limits['zinc'][0] and nutrients['zinc'] <= limits['zinc'][1]) and \
+            # (nutrients['copper'] >= limits['copper'][0] and nutrients['copper'] <= limits['copper'][1]) and \
+            # (nutrients['manganese'] >= limits['manganese'][0] and nutrients['manganese'] <= limits['manganese'][1]) and \
+            # (nutrients['fluoride'] >= limits['fluoride'][0] and nutrients['fluoride'] <= limits['fluoride'][1]) and \
+            # (nutrients['iodide'] >= limits['iodide'][0] and nutrients['iodide'] <= limits['iodide'][1]):
+        print('in limits')
+        return True
+    print('not in limits')
+    return False
+def is_in_limits3(nutrients, limits):
+    print(nutrients['energy_kcal'])
+    print(limits['energy_kcal'][0])
+    print(limits['energy_kcal'][1])
+    if nutrients is None:
+        return True
+    if (nutrients['energy_kcal'] in frange(limits['energy_kcal'][0], limits['energy_kcal'][1])) :#and \
+        # (nutrients['energy_kj'] in frange(limits['energy_kj'][0], limits['energy_kj'][1])) and \
+        # (nutrients['carbs'] in frange(limits['carbs'][0], limits['carbs'][1])) and \
+        # (nutrients['fat'] in frange(limits['fat'][0], limits['fat'][1])) and \
+        # (nutrients['protein'] in frange(limits['protein'][0], limits['protein'][1])) and \
+        # (nutrients['fibre'] in frange(limits['fibre'][0], limits['fibre'][1])) and \
+        # (nutrients['vitamin_a'] in frange(limits['vitamin_a'][0], limits['vitamin_a'][1])) and \
+        # (nutrients['vitamin_b1'] in frange(limits['vitamin_b1'][0], limits['vitamin_b1'][1])) and \
+        # (nutrients['vitamin_b2'] in frange(limits['vitamin_b2'][0], limits['vitamin_b2'][1])) and \
+        # (nutrients['vitamin_b3'] in frange(limits['vitamin_b3'][0], limits['vitamin_b3'][1])) and \
+        # (nutrients['vitamin_b5'] in frange(limits['vitamin_b5'][0], limits['vitamin_b5'][1])) and \
+        # (nutrients['vitamin_b6'] in frange(limits['vitamin_b6'][0], limits['vitamin_b5'][1])) and \
+        # (nutrients['vitamin_b7'] in frange(limits['vitamin_b7'][0], limits['vitamin_b7'][1])) and \
+        # (nutrients['vitamin_b9'] in frange(limits['vitamin_b9'][0], limits['vitamin_b9'][1])) and \
+        # (nutrients['vitamin_b12'] in frange(limits['vitamin_b12'][0], limits['vitamin_b12'][1])) and \
+        # (nutrients['vitamin_c'] in frange(limits['vitamin_c'][0], limits['vitamin_c'][1])) and \
+        # (nutrients['vitamin_d'] in frange(limits['vitamin_d'][0], limits['vitamin_d'][1])) and \
+        # (nutrients['vitamin_e'] in frange(limits['vitamin_e'][0], limits['vitamin_e'][1])) and \
+        # (nutrients['vitamin_k'] in frange(limits['vitamin_k'][0], limits['vitamin_k'][1])) and \
+        # (nutrients['sodium'] in frange(limits['sodium'][0], limits['sodium'][1])) and \
+        # (nutrients['potassium'] in frange(limits['potassium'][0], limits['potassium'][1])) and \
+        # (nutrients['calcium']in frange(limits['calcium'][0], limits['calcium'][1])) and \
+        # (nutrients['magnesium'] in frange(limits['magnesium'][0], limits['magnesium'][1])) and \
+        # (nutrients['phosphorus']  in frange(limits['phosphorus'][0], limits['phosphorus'][1])) and \
+        # (nutrients['iron'] in frange(limits['iron'][0], limits['iron'][1])) and \
+        # (nutrients['zinc'] in frange(limits['zinc'][0], limits['zinc'][1])) and \
+        # (nutrients['copper'] in frange(limits['copper'][0], limits['copper'][1])) and \
+        # (nutrients['manganese'] in frange(limits['manganese'][0], limits['manganese'][1])) and \
+        # (nutrients['fluoride'] in frange(limits['fluoride'][0], limits['fluoride'][1])) and \
+        # (nutrients['iodide']  in frange(limits['iodide'][0], limits['iodide'][1])) :
+        print('in limits')
+        return True
+    print('not in limits')
+    return False
+class MealType(models.Model):
+    name = models.CharField('name', max_length=200, default='breakfast')
+    type = models.CharField('type', max_length=2, default='breakfast',
+                            choices=(('b', 'breakfast'), ('l', 'lunch'), ('d', 'dinner'), ('s', 'snack')))
+    def __str__(self):
+        return self.name
+
+
+class Meal(models.Model):
+    name = models.CharField('name', max_length=200, default='Salad')
+    type = models.CharField('type', max_length=2, default='breakfast',
+                            choices=(('b', 'breakfast'), ('l', 'lunch'), ('d', 'dinner'), ('s', 'snack')))
+    ingredients = models.ManyToManyField('Ingredients', related_name='ingredients')
+    event = models.ManyToManyField('schedule.Event', related_name='event')
+
+    energy_kcal = models.FloatField('energy (kcal)', null=True, blank=True)
+    energy_kj = models.FloatField('energy (kJ)', null=True, blank=True)
+    carbs = models.FloatField('carbohydrates', null=True, blank=True)
+    fat = models.FloatField('fat', null=True, blank=True)
+    protein = models.FloatField('protein', null=True, blank=True)
+    fibre = models.FloatField('fibre', null=True, blank=True)
+    sugar_total= models.FloatField('sugar total', null=True, blank=True)
+    sum_of_saturated_fatty_acids = models.FloatField('sum of saturated fatty acids', null=True, blank=True)
+    sum_of_monounsaturated_fatty_acids = models.FloatField('sum of monounsaturated fatty acids', null=True, blank=True)
+    sum_of_polyunsaturated_fatty_acids = models.FloatField('sum of polyunsaturated fatty acids', null=True, blank=True)
+    lactose = models.FloatField('lactose(mg)', null=True, blank=True)
+    fructose = models.FloatField('fructose(mg)', null=True, blank=True)
+
+    # vitamins
+    vitamin_a = models.FloatField('vitamin A(µg)', null=True, blank=True)
+    vitamin_b1 = models.FloatField('vitamin B1(µg)', null=True, blank=True)
+    vitamin_b2 = models.FloatField('vitamin B2(µg)', null=True, blank=True)
+    vitamin_b3 = models.FloatField('vitamin B3(µg)', null=True, blank=True)
+    vitamin_b5 = models.FloatField('vitamin B5(µg)', null=True, blank=True)
+    vitamin_b6 = models.FloatField('vitamin B6 µg)', null=True, blank=True)
+    vitamin_b7 = models.FloatField('vitamin B7(µg)', null=True, blank=True)
+    vitamin_b9 = models.FloatField('vitamin B9(µg)', null=True, blank=True)
+    vitamin_b12 = models.FloatField('vitamin B12(µg)', null=True, blank=True)
+    vitamin_c = models.FloatField('vitamin C(µg)', null=True, blank=True)
+    vitamin_d = models.FloatField('vitamin D(µg)', null=True, blank=True)
+    vitamin_e = models.FloatField('vitamin E(µg)', null=True, blank=True)
+    vitamin_k = models.FloatField('vitamin K(µg)', null=True, blank=True)
+
+    # minerals
+    sodium = models.FloatField('sodium(mg)', null=True, blank=True)
+    potassium = models.FloatField('potassium(mg)', null=True, blank=True)
+    calcium = models.FloatField('calcium(mg)', null=True, blank=True)
+    magnesium = models.FloatField('magnesium(mg)', null=True, blank=True)
+    # not that necessary
+    phosphorus = models.FloatField('phosphorus(mg)', null=True, blank=True)
+    sulphur = models.FloatField('sulphor(mg)', null=True, blank=True)
+    chloride = models.FloatField('chloride(mg)', null=True, blank=True)
+
+    # trace elements
+    iron = models.FloatField('iron(µg)', null=True, blank=True)
+    zinc = models.FloatField('zinc(µg)', null=True, blank=True)
+    copper = models.FloatField('copper(µg)', null=True, blank=True)
+    manganese = models.FloatField('mangnese(µg)', null=True, blank=True)
+    fluoride = models.FloatField('fluoride(µg)', null=True, blank=True)
+    iodide = models.FloatField('iodide(µg)', null=True, blank=True)
+
+    def __str__(self):
+        return self.name
+
+    def get_nutrients(self):
+        nutrients = Meal.objects.filter(id=self.id).values('energy_kcal','energy_kj','carbs', 'fat','protein','fibre','sugar_total',
+            'sum_of_saturated_fatty_acids','sum_of_monounsaturated_fatty_acids','sum_of_polyunsaturated_fatty_acids','lactose','fructose','vitamin_a',
+            'vitamin_b1','vitamin_b2','vitamin_b2','vitamin_b3','vitamin_b5','vitamin_b6','vitamin_b7','vitamin_b9',
+            'vitamin_b12','vitamin_c','vitamin_d','vitamin_e','vitamin_k','sodium','potassium','calcium',
+            'magnesium','phosphorus','iron','zinc','copper','manganese','fluoride','iodide')
+        return nutrients[0]
+
+    
+    def set_nutrients(self):
+        self.energy_kcal = self.ingredients.all().aggregate(energy_kcal__sum=Coalesce(Sum('energy_kcal'),0))['energy_kcal__sum']
+        self.energy_kj = self.ingredients.all().aggregate(energy_kj__sum=Coalesce(Sum('energy_kj'),0))['energy_kj__sum']
+        self.carbs = self.ingredients.all().aggregate(carbs__sum=Coalesce(Sum('carbs'),0))['carbs__sum']
+        self.fat = self.ingredients.all().aggregate(fat__sum=Coalesce(Sum('fat'),0))['fat__sum']
+        self.protein = self.ingredients.all().aggregate(protein__sum=Coalesce(Sum('protein'),0))['protein__sum']
+        self.fibre = self.ingredients.all().aggregate(fibre__sum=Coalesce(Sum('fibre'),0))['fibre__sum']
+        self.sugar_total = self.ingredients.all().aggregate(sugar_total__sum=Coalesce(Sum('sugar_total'),0))['sugar_total__sum']
+        self.sum_of_saturated_fatty_acids = self.ingredients.all().aggregate(sum_of_saturated_fatty_acids__sum=Coalesce(Sum('sum_of_saturated_fatty_acids'),0))['sum_of_saturated_fatty_acids__sum']
+        self.sum_of_monounsaturated_fatty_acids = self.ingredients.all().aggregate(sum_of_monounsaturated_fatty_acids__sum=Coalesce(Sum('sum_of_monounsaturated_fatty_acids'),0))['sum_of_monounsaturated_fatty_acids__sum']
+        self.sum_of_polyunsaturated_fatty_acids = self.ingredients.all().aggregate(sum_of_polyunsaturated_fatty_acids__sum=Coalesce(Sum('sum_of_polyunsaturated_fatty_acids'),0))['sum_of_polyunsaturated_fatty_acids__sum']
+        self.lactose = self.ingredients.all().aggregate(lactose__sum=Coalesce(Sum('lactose'),0))['lactose__sum']
+        self.fructose = self.ingredients.all().aggregate(fructose__sum=Coalesce(Sum('fructose'),0))['fructose__sum']
+
+
+        self.vitamin_a = self.ingredients.all().aggregate(vitamin_a__sum=Coalesce(Sum('vitamin_a'),0))['vitamin_a__sum']
+        self.vitamin_b1 = self.ingredients.all().aggregate(vitamin_b1__sum=Coalesce(Sum('vitamin_b1'),0))['vitamin_b1__sum']
+        self.vitamin_b2 = self.ingredients.all().aggregate(vitamin_b2__sum=Coalesce(Sum('vitamin_b2'),0))['vitamin_b2__sum']
+        self.vitamin_b3 = self.ingredients.all().aggregate(vitamin_b3__sum=Coalesce(Sum('vitamin_b3'),0))['vitamin_b3__sum']
+        self.vitamin_b5 = self.ingredients.all().aggregate(vitamin_b5__sum=Coalesce(Sum('vitamin_b5'),0))['vitamin_b5__sum']
+        self.vitamin_b6 = self.ingredients.all().aggregate(vitamin_b6__sum=Coalesce(Sum('vitamin_b6'),0))['vitamin_b6__sum']
+        self.vitamin_b7 = self.ingredients.all().aggregate(vitamin_b7__sum=Coalesce(Sum('vitamin_b7'),0))['vitamin_b7__sum']
+        self.vitamin_b9 = self.ingredients.all().aggregate(vitamin_b9__sum=Coalesce(Sum('vitamin_b9'),0))['vitamin_b9__sum']
+        self.vitamin_b12 = self.ingredients.all().aggregate(vitamin_b12__sum=Coalesce(Sum('vitamin_b12'),0))['vitamin_b12__sum']
+        self.vitamin_c = self.ingredients.all().aggregate(vitamin_c__sum=Coalesce(Sum('vitamin_c'),0))['vitamin_c__sum']
+        self.vitamin_d = self.ingredients.all().aggregate(vitamin_d__sum=Coalesce(Sum('vitamin_d'),0))['vitamin_d__sum']
+        self.vitamin_e = self.ingredients.all().aggregate(vitamin_e__sum=Coalesce(Sum('vitamin_e'),0))['vitamin_e__sum']
+        self.vitamin_k = self.ingredients.all().aggregate(vitamin_k__sum=Coalesce(Sum('vitamin_k'),0))['vitamin_k__sum']
+
+        self.sodium = self.ingredients.all().aggregate(sodium__sum=Coalesce(Sum('sodium'),0))['sodium__sum']
+        self.potassium = self.ingredients.all().aggregate(potassium__sum=Coalesce(Sum('potassium'),0))['potassium__sum']
+        self.calcium = self.ingredients.all().aggregate(calcium__sum=Coalesce(Sum('calcium'),0))['calcium__sum']
+        self.magnesium = self.ingredients.all().aggregate(magnesium__sum=Coalesce(Sum('magnesium'),0))['magnesium__sum']
+        self.phosphorus = self.ingredients.all().aggregate(phosphorus__sum=Coalesce(Sum('phosphorus'),0))['phosphorus__sum']
+        self.iron = self.ingredients.all().aggregate(iron__sum=Coalesce(Sum('iron'),0))['iron__sum']
+        self.zinc = self.ingredients.all().aggregate(zinc__sum=Coalesce(Sum('zinc'),0))['zinc__sum']
+        self.copper = self.ingredients.all().aggregate(copper__sum=Coalesce(Sum('copper'),0))['copper__sum']
+        self.manganese = self.ingredients.all().aggregate(manganese__sum=Coalesce(Sum('manganese'),0))['manganese__sum']
+        self.fluoride = self.ingredients.all().aggregate(fluoride__sum=Coalesce(Sum('fluoride'),0))['fluoride__sum']
+        self.iodide = self.ingredients.all().aggregate(iodide__sum=Coalesce(Sum('iodide'),0))['iodide__sum']
+        self.save()
+
+
+class IngredientManager(models.Manager):
+
+    def get_lactose_free(self):
+        return self.exclude(lactose__gt=0)
+
+    def get_fructose_free(self):
+        return self.exclude(frucose__gt=0)
+
+    def get_vegan(self):
+        return self.filter(suitable_for='v')
+
+    def get_veggie(self):
+        return self.filter(suitable_for__startswith='v')
+
+    def exclude_drinks(self):
+        return self.exclude(key__regex=r'[NP]')
+
+    def exclude_seasoning(self):
+        return self.exclude(key__startswith=r'R')
+
+    def exclude_flour_raw_stuff(self):
+        return self.exclude(Q(key__startswith=r'C') & Q(name__regex=r'roh|(m|M)ehl'))
+
+    def only_eatable_foods(self):
+        qs = self.exclude_drinks()
+        qs = qs.exclude_seasoning()
+        qs = qs.exclude_flour_raw_suff()
+        return qs
+
+
+class Ingredients(models.Model):
+    key = models.CharField('key', null=True, blank=True,max_length=200, default='B100000')
+    name = models.CharField('name', null=True, blank=True,max_length=200, default='Tomato')
+    suitable_for = models.CharField('suitable for', null=True, blank=True, max_length=20, default='vegetarian',
+                                    choices=(('o', 'omnivore'), ('veggie', 'vegetarian'), ('v', 'vegan')))
+    contains = models.CharField('contains', max_length=20, null=True, blank=True)
+
+    energy_kcal = models.FloatField('energy (kcal)', null=True, blank=True)
+    energy_kj = models.FloatField('energy (kJ)', null=True, blank=True)
+    carbs = models.FloatField('carbohydrates', null=True, blank=True)
+    fat = models.FloatField('fat', null=True, blank=True)
+    protein = models.FloatField('protein', null=True, blank=True)
+    fibre = models.FloatField('fibre', null=True, blank=True)
+    sugar_total= models.FloatField('sugar total', null=True, blank=True)
+    sum_of_saturated_fatty_acids = models.FloatField('sum of saturated fatty acids', null=True, blank=True)
+    sum_of_monounsaturated_fatty_acids = models.FloatField('sum of monounsaturated fatty acids', null=True, blank=True)
+    sum_of_polyunsaturated_fatty_acids = models.FloatField('sum of polyunsaturated fatty acids', null=True, blank=True)
+    lactose = models.FloatField('lactose(mg)', null=True, blank=True)
+    fructose = models.FloatField('fructose(mg)', null=True, blank=True)
+
+    # vitamins
+    vitamin_a = models.FloatField('vitamin A(µg)', null=True, blank=True)
+    vitamin_b1 = models.FloatField('vitamin B1(µg)', null=True, blank=True)
+    vitamin_b2 = models.FloatField('vitamin B2(µg)', null=True, blank=True)
+    vitamin_b3 = models.FloatField('vitamin B3(µg)', null=True, blank=True)
+    vitamin_b5 = models.FloatField('vitamin B5(µg)', null=True, blank=True)
+    vitamin_b6 = models.FloatField('vitamin B6 µg)', null=True, blank=True)
+    vitamin_b7 = models.FloatField('vitamin B7(µg)', null=True, blank=True)
+    vitamin_b9 = models.FloatField('vitamin B9(µg)', null=True, blank=True)
+    vitamin_b12 = models.FloatField('vitamin B12(µg)', null=True, blank=True)
+    vitamin_c = models.FloatField('vitamin C(µg)', null=True, blank=True)
+    vitamin_d = models.FloatField('vitamin D(µg)', null=True, blank=True)
+    vitamin_e = models.FloatField('vitamin E(µg)', null=True, blank=True)
+    vitamin_k = models.FloatField('vitamin K(µg)', null=True, blank=True)
+
+    # minerals
+    sodium = models.FloatField('sodium(mg)', null=True, blank=True)
+    potassium = models.FloatField('potassium(mg)', null=True, blank=True)
+    calcium = models.FloatField('calcium(mg)', null=True, blank=True)
+    magnesium = models.FloatField('magnesium(mg)', null=True, blank=True)
+    # not that necessary
+    phosphorus = models.FloatField('phosphorus(mg)', null=True, blank=True)
+    sulphur = models.FloatField('sulphor(mg)', null=True, blank=True)
+    chloride = models.FloatField('chloride(mg)', null=True, blank=True)
+
+    # trace elements
+    iron = models.FloatField('iron(µg)', null=True, blank=True)
+    zinc = models.FloatField('zinc(µg)', null=True, blank=True)
+    copper = models.FloatField('copper(µg)', null=True, blank=True)
+    manganese = models.FloatField('mangnese(µg)', null=True, blank=True)
+    fluoride = models.FloatField('fluoride(µg)', null=True, blank=True)
+    iodide = models.FloatField('iodide(µg)', null=True, blank=True)
+
+    objects = IngredientManager()
+
+    meal_group = models.CharField('meal group', null=True, blank=True, max_length=20)
+
+    type = models.ManyToManyField('MealType', related_name='mealtype')
+
+    def __str__(self):
+        return self.name
+
+    def is_in_limits2(self, limits):
+        print(nutrients['energy_kcal'])
+        print(limits['energy_kcal'][0])
+        print(limits['energy_kcal'][1])
+        if nutrients is None:
+            return True
+        if (self.energy_kcal in range(limits['energy_kcal'][0], limits['energy_kcal'][1])) and \
+            (self.energy_kj in range(limits['energy_kj'][0], limits['energy_kj'][1])) and \
+            (self.carbs in range(limits['carbs'][0], limits['carbs'][1])) and \
+            (self.fat in range(limits['fat'][0], limits['fat'][1])) and \
+            (self.protein in range(limits['protein'][0], limits['protein'][1])) and \
+            (self.fibre in range(limits['fibre'][0], limits['fibre'][1])) and \
+            (self.vitamin_a in range(limits['vitamin_a'][0], limits['vitamin_a'][1])) and \
+            (self.vitamin_b1 in range(limits['vitamin_b1'][0], limits['vitamin_b1'][1])) and \
+            (self.vitamin_b2 in range(limits['vitamin_b2'][0], limits['vitamin_b2'][1])) and \
+            (self.vitamin_b3 in range(limits['vitamin_b3'][0], limits['vitamin_b3'][1])) and \
+            (self.vitamin_b5 in range(limits['vitamin_b5'][0], limits['vitamin_b5'][1])) and \
+            (self.vitamin_b6 in range(limits['vitamin_b6'][0], limits['vitamin_b5'][1])) and \
+            (self.vitamin_b7 in range(limits['vitamin_b7'][0], limits['vitamin_b7'][1])) and \
+            (self.vitamin_b9 in range(limits['vitamin_b9'][0], limits['vitamin_b9'][1])) and \
+            (self.vitamin_b12 in range(limits['vitamin_b12'][0], limits['vitamin_b12'][1])) and \
+            (self.vitamin_c in range(limits['vitamin_c'][0], limits['vitamin_c'][1])) and \
+            (self.vitamin_d in range(limits['vitamin_d'][0], limits['vitamin_d'][1])) and \
+            (self.vitamin_e in range(limits['vitamin_e'][0], limits['vitamin_e'][1])) and \
+            (self.vitamin_k in range(limits['vitamin_k'][0], limits['vitamin_k'][1])) and \
+            (self.sodium in range(limits['sodium'][0], limits['sodium'][1])) and \
+            (self.potassium in range(limits['potassium'][0], limits['potassium'][1])) and \
+            (self.calcium in range(limits['calcium'][0], limits['calcium'][1])) and \
+            (self.magnesium in range(limits['magnesium'][0], limits['magnesium'][1])) and \
+            (self.phosphorus in range(limits['phosphorus'][0], limits['phosphorus'][1])) and \
+            (self.iron in range(limits['iron'][0], limits['iron'][1])) and \
+            (self.zinc in range(limits['zinc'][0], limits['zinc'][1])) and \
+            (self.copper in range(limits['copper'][0], limits['copper'][1])) and \
+            (self.manganese in range(limits['manganese'][0], limits['manganese'][1])) and \
+            (self.fluoride in range(limits['fluoride'][0], limits['fluoride'][1])) and \
+            (self.iodide  in range(limits['iodide'][0], limits['iodide'][1])) :
+            return True
+
+    def can_add(self,meal_nutrients,limits):
+        if not self.energy_kcal in frange(meal_nutrients['energy_kcal'], limits['energy_kcal'][1]):
+            print('too many kcals')
+            return False
+        # elif not self.energy_kj in frange(meal_nutrients['energy_kj'], limits['energy_kj'][1]):
+        #     return False
+        # elif not self.carbs in frange(meal_nutrients['carbs'], limits['carbs'][1]):
+        #     return False
+        # elif not self.fat in frange(meal_nutrients['fat'], limits['fat'][1]):
+        #     return False
+        elif not self.protein in frange(meal_nutrients['protein'], limits['protein'][1]):
+            print('too many proteins')
+            return False
+        # elif not self.fibre in range(meal_nutrients['fibre'], limits['fibre'][1]):
+        #     return False
+        # elif not self.vitamin_a in range(meal_nutrients['vitamin_a'], limits['vitamin_a'][1]):
+        #     return False
+        # elif not self.vitamin_b1 in range(meal_nutrients['vitamin_b1'], limits['vitamin_b1'][1]):
+        #     return False
+        # elif not self.vitamin_b2 in range(meal_nutrients['vitamin_b2'], limits['vitamin_b2'][1]):
+        #     return False
+        # elif not self.vitamin_b3 in range(meal_nutrients['vitamin_b3'], limits['vitamin_b3'][1]):
+        #     return False
+        # elif self.vitamin_b5 in range(meal_nutrients['vitamin_b5'], limits['vitamin_b5'][1]):
+        #     return False
+        # elif not self.vitamin_b6 in range(meal_nutrients['vitamin_b6'], limits['vitamin_b5'][1]):
+        #     return False
+        # elif not self.vitamin_b7 in range(meal_nutrients['vitamin_b7'], limits['vitamin_b7'][1]):
+        #     return False
+        # elif not self.vitamin_b9 in range(meal_nutrients['vitamin_b9'], limits['vitamin_b9'][1]):
+        #     return False
+        # elif not self.vitamin_b12 in range(meal_nutrients['vitamin_b12'], limits['vitamin_b12'][1]):
+        #     return False
+        # elif not self.vitamin_c in range(meal_nutrients['vitamin_c'], limits['vitamin_c'][1]):
+        #     return False
+        # elif not self.vitamin_d in range(meal_nutrients['vitamin_d'], limits['vitamin_d'][1]):
+        #     return False
+        # elif not self.vitamin_e in range(meal_nutrients['vitamin_e'], limits['vitamin_e'][1]):
+        #     return False
+        # elif not self.vitamin_k in range(meal_nutrients['vitamin_k'], limits['vitamin_k'][1]):
+        #     return False
+        # elif not self.sodium in range(meal_nutrients['sodium'], limits['sodium'][1]):
+        #     return False
+        # elif not self.potassium in range(meal_nutrients['potassium'], limits['potassium'][1]):
+        #     return False
+        # elif not self.calcium in range(meal_nutrients['calcium'], limits['calcium'][1]):
+        #     return False
+        # elif not self.magnesium in range(meal_nutrients['magnesium'], limits['magnesium'][1]):
+        #     return False
+        # elif not self.phosphorus in range(meal_nutrients['phosphorus'], limits['phosphorus'][1]):
+        #     return False
+        # elif not self.iron in range(meal_nutrients['iron'], limits['iron'][1]):
+        #     return False
+        # elif not self.zinc in range(meal_nutrients['zinc'], limits['zinc'][1]):
+        #     return False
+        # elif not self.copper in range(meal_nutrients['copper'], limits['copper'][1]):
+        #     return False
+        # elif not self.manganese in range(meal_nutrients['manganese'], limits['manganese'][1]):
+        #     return False
+        # elif not self.fluoride in range(meal_nutrients['fluoride'], limits['fluoride'][1]):
+        #     return False
+        # elif not self.iodide  in range(meal_nutrients['iodide'], limits['iodide'][1]):
+        #     return False
+        print('can add ' + self.name)
+        return True

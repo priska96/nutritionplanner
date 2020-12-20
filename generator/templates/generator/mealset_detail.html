@@ -1,0 +1,33 @@
+{% load tags %}
+<span class="close" style="max-width:{{ container_max_width }}px"><i class="fa fa-times"></i></span>
+<h1>{{ date|date:'D., d.b' }}</h1>
+<div class="mealset_container" style="width:{{ container_width }}%">
+    {% if mealset %}
+        <p>
+            {% for meal in meals %}
+                <h4>
+                    {{ meal.mealtype.name }}
+                    <sup>{% if meal.note %}<i class="fa fa-exclamation-triangle" title="{{ meal.note }}"></i>{% endif %}{{ meal.mealtype.starttime|date:'H:i' }} - {{ meal.mealtype.endtime|date:'H:i' }} Uhr</sup>
+                </h4>
+                {% get_ingredients_infos meal %}
+            {% endfor %}
+        </p>
+        <div class="nutrients_container" style="max-width:{{ container_max_width }}px">
+            <span class="heading">Nährwerte:</span>
+            {% get_nutrients_infos mealset=mealset %}
+        </div>
+    {% else %}
+    <p>
+        <span>Für diesen Tag wurden noch keine Gerichte erstellt.</span>
+    </p>
+    {% endif %}
+</div>
+<script type="text/javascript">
+    $(document).ready(function () {
+        $(' .fa-exclamation-triangle').tooltip({
+            classes: {
+                "ui-tooltip": "dark"
+            }
+        });
+    })
+</script>
